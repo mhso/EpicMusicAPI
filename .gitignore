@@ -3,3 +3,5 @@
 log
 uv.lock
 __pycache__
+test.json
+resources/database

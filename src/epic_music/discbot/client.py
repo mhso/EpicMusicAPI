@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from discord import Client, Guild, Reaction, TextChannel, Message, Forbidden, Intents
+from loguru import logger
 
 from epic_music.api.requests import RateLimitAPIClient, on_messages_synced, extract_url_info
 from epic_music.api.models import FeedEntry
@@ -47,7 +48,10 @@ class DiscordClient(Client):
         self.guild = self.get_guild(GUILD_ID)
         self.channel = self.guild.get_channel(CHANNEL_ID)
 
-        await self.sync_messages()
+        try:
+            await self.sync_messages()
+        except Exception:
+            logger.exception("Exception when syncing Discord messages!")
 
     async def _handle_message(self, message: Message):
         if message.channel.id != self.channel.id or message.author.id not in DISCORD_IDS:
@@ -91,8 +95,8 @@ class DiscordClient(Client):
 
             await on_messages_synced(track_data, self.api_client, self.database_client)
 
-        except Forbidden as exc:
-            print("Insufficient permissions to read messages:", exc)
+        except Forbidden:
+            logger.exception("Insufficient permissions to read Discord messages!")
 
     async def on_message(self, message: Message):
         track_data = await self._handle_message(message)

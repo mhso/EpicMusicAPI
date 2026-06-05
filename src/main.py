@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from epic_music.api.requests import RateLimitAPIClient, handle_list_entries
-from epic_music.api.models import ProcessedFeedEntry, ListFeedRequest, TaskStartResponse, TaskStatusResponse
+from epic_music.api.models import FeedEntry, ListFeedRequest, TaskStartResponse, TaskStatusResponse
 from epic_music.database.client import DatabaseClient
 from epic_music.discbot.client import DiscordClient
 
@@ -54,7 +54,7 @@ async def fastapi_lifespan(app: FastAPI):
 app = FastAPI(title="Epic Music API", lifespan=fastapi_lifespan)
 
 @app.get("/list")
-async def list_entries(request: ListFeedRequest) -> List[ProcessedFeedEntry]:
+async def list_entries(request: ListFeedRequest) -> List[FeedEntry]:
     """
     Load entries from the database, optionally filtered or sorted
     based on given parameters and with pagination support

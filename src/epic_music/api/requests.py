@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 import json
-from typing import Any, Dict, List, Literal, Sequence
+from typing import Any, Dict, List, Literal, Sequence, Tuple
 from os import environ
 from urllib.parse import urlparse, parse_qs
 from time import time
@@ -351,8 +351,10 @@ async def _evaluate_lookup_result(raw_data: Dict[str, str], processed_data: Dict
 
     processed_copy = dict(processed_data)
     del processed_copy["genres"]
-    processed_copy["track"] = processed_copy["title"]
-    del processed_copy["title"]
+
+    if "title" in processed_copy:
+        processed_copy["track"] = processed_copy["title"]
+        del processed_copy["title"]
 
     raw_json = json.dumps(raw_data)
     processed_json = json.dumps(processed_copy)
@@ -365,8 +367,6 @@ Evaluate whether the output has captured the correct track/album and artist from
 Put emphasis on the keys 'artist' and 'track', if they are present.
 
 Give a score between 0 and 1 where 0 means nothing matches and 1 is a perfect match."""
-
-    print(prompt)
 
     message = await client.messages.create(
         max_tokens=1024,
@@ -438,7 +438,7 @@ def _handle_youtube_link(base_url: str | None, embed_url: str | None):
 
     return video_id
 
-def _handle_spotify_link(base_url: str | None):
+def _handle_spotify_link(base_url: str | None) -> str | None:
     """
     1. Query Spotify API by track ID
     2. Query YouTube API for video of the song title
@@ -450,9 +450,11 @@ def extract_url_info(
     base_url: str | None,
     embed_url: str | None,
     site_name: str | None
-):
+) -> Tuple[str | None, str | None]:
     if site_name is None:
         site_name = _extract_site_name(base_url, embed_url)
+    else:
+        site_name = site_name.lower()
 
     if site_name is None:
         return None, None
@@ -465,13 +467,20 @@ def extract_url_info(
 
     return site_name, video_id
 
-async def handle_list_entries(request: ListFeedRequest, database_client: DatabaseClient) -> Sequence[FeedEntry]:
+async def handle_list_entries(request: ListFeedRequest, database_client: DatabaseClient) -> List[FeedEntry]:
     """
     Load entries from the database, optionally filtered or sorted
     based on given parameters and with pagination support_make_request
     """
     with database_client as cursor:
-        return cursor.get_feed_entries(request.page, request.sort_by, request.sort_order == "asc", request.filters)
+        return list(
+            cursor.get_feed_entries(
+                request.page,
+                request.sort_by,
+                request.sort_order == "asc",
+                request.filters,
+            )
+        )
 
 async def on_messages_synced(
     feed_entries: List[Dict[str, Any]],

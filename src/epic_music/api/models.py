@@ -70,14 +70,19 @@ class EntryReaction(SQLModel, table=True):
 # | Pydantic FastAPI models |
 # \*************************/
 FeedFilters = Literal["site_name", "artist", "genre", "posted_by"]
+FeedSortOrders = Literal["date_posted", "reactions"]
 
 class ListFeedRequest(BaseModel):
     filters: Dict[FeedFilters, str]
-    sort_by: Literal["date_posted", "reactions"]
+    sort_by: Literal[FeedSortOrders]
     sort_order: Literal["asc", "desc"]
     page: int = 0
 
     model_config = {"alias_generator": to_camel}
+
+class ListFeedResponse(BaseModel):
+    entries: List[FeedEntry]
+    total: int
 
 class TaskStartResponse(BaseModel):
     status: Literal["success", "already_running", "error"]

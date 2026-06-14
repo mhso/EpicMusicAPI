@@ -20,4 +20,4 @@ COPY resources ./resources
 
 # Run the server
 WORKDIR /epic_music/src
-CMD uv run uvicorn --port ${PORT} main:app
+CMD uv run uvicorn --host 0.0.0.0 --port ${PORT} main:app

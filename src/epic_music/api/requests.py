@@ -10,13 +10,14 @@ from httpx import AsyncClient, Auth, DigestAuth, ReadTimeout
 from loguru import logger
 from anthropic import AsyncAnthropic
 
-from epic_music.api.models import FeedEntry, ListFeedRequest, EntryReaction, TrackArtist, TrackGenre
+from epic_music.api.models import FeedEntry, ListFeedRequest, ListFeedResponse, EntryReaction, TrackArtist, TrackGenre
 from epic_music.database.client import DatabaseClient
 
 _MUSICBRANZ_BASE_URL = "https://musicbrainz.org/ws/2"
 _YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 _YOUTUBE_LIST_URL = "https://www.googleapis.com/youtube/v3/videos"
 _DISCOGS_SEARCH_URL = "https://api.discogs.com/database/search"
+_CLAUDE_TRACK_SCORE_THRESHOLD = 0.5
 
 _SupportedSites = Literal["youtube", "musicbrainz", "discogs"]
 
@@ -467,20 +468,19 @@ def extract_url_info(
 
     return site_name, video_id
 
-async def handle_list_entries(request: ListFeedRequest, database_client: DatabaseClient) -> List[FeedEntry]:
+async def handle_list_entries(request: ListFeedRequest, database_client: DatabaseClient) -> ListFeedResponse:
     """
     Load entries from the database, optionally filtered or sorted
     based on given parameters and with pagination support_make_request
     """
     with database_client as cursor:
-        return list(
-            cursor.get_feed_entries(
-                request.page,
-                request.sort_by,
-                request.sort_order == "asc",
-                request.filters,
-            )
+        entries, total = cursor.get_feed_entries(
+            request.page,
+            request.sort_by,
+            request.sort_order == "asc",
+            request.filters,
         )
+        return ListFeedResponse(entries=list(entries), total=total)
 
 async def on_messages_synced(
     feed_entries: List[Dict[str, Any]],
@@ -530,7 +530,7 @@ async def on_messages_synced(
 
             print("Score evaluated by Claude:", score_data)
 
-            if score_data["score"] < 0.6:
+            if score_data["score"] < _CLAUDE_TRACK_SCORE_THRESHOLD:
                 track_data = {}
 
         reactions = [EntryReaction(**reaction_data) for reaction_data in raw_data.pop("reactions")]

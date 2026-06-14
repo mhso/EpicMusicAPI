@@ -1,15 +1,16 @@
-from asyncio import create_task, Task
+import asyncio
 from contextlib import asynccontextmanager
 from os import environ
 from sys import stdout
 from typing import List
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from loguru import logger
 
 from epic_music.api.requests import RateLimitAPIClient, handle_list_entries
-from epic_music.api.models import FeedEntry, ListFeedRequest, TaskStartResponse, TaskStatusResponse
+from epic_music.api.models import ListFeedResponse, ListFeedRequest, TaskStartResponse, TaskStatusResponse
 from epic_music.database.client import DatabaseClient
 from epic_music.discbot.client import DiscordClient
 
@@ -34,7 +35,7 @@ async def fastapi_lifespan(app: FastAPI):
     # Create and start Discord client
     logger.info("Starting Discord client...")
     discord_client = DiscordClient(database_client, api_client)
-    await discord_client.start(environ["DISCORD_TOKEN"])
+    discord_task = asyncio.create_task(discord_client.start(environ["DISCORD_TOKEN"]))
 
     # Attach clients to the FastAPI app
     app.extra["database_client"] = database_client
@@ -47,14 +48,25 @@ async def fastapi_lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down FastAPI...")
-
     database_client.engine.dispose()
-    await discord_client.close()
 
-app = FastAPI(title="Epic Music API", lifespan=fastapi_lifespan)
+    logger.info("Shutting down Discord bot...")
+    await discord_client.close()
+    while not discord_task.done():
+        await asyncio.sleep(0.1)
+
+app = FastAPI(debug=True, title="Epic Music API", lifespan=fastapi_lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/list")
-async def list_entries(request: ListFeedRequest) -> List[FeedEntry]:
+async def list_entries(request: ListFeedRequest) -> ListFeedResponse:
     """
     Load entries from the database, optionally filtered or sorted
     based on given parameters and with pagination support
@@ -73,7 +85,7 @@ async def sync_entries() -> TaskStartResponse:
         return TaskStartResponse(status="already_running", task_id=_SYNC_TASK_ID)
 
     try:
-        sync_task[_SYNC_TASK_ID] = create_task(app.extra["discord_client"].sync_messages())
+        sync_task[_SYNC_TASK_ID] = asyncio.create_task(app.extra["discord_client"].sync_messages())
     except Exception:
         logger.exception("Error when creating sync task!")
         status = "error"
@@ -85,7 +97,7 @@ async def poll_status(task_id: str) -> TaskStatusResponse:
     """
     Returns the status of a running background task.
     """
-    task: Task = app.extra["background_tasks"].get(task_id)
+    task: asyncio.Task = app.extra["background_tasks"].get(task_id)
     if not task:
         status = "missing"
     elif task.done():

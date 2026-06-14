@@ -1,11 +1,11 @@
 from datetime import datetime
 from os import environ
-from typing import Dict, List, Literal, Sequence
+from typing import Dict, List, Literal, Sequence, Tuple
 
-from sqlalchemy.sql.functions import max
+from sqlalchemy.sql.functions import max, count
 from sqlmodel import SQLModel, Session, create_engine, select
 
-from epic_music.api.models import FeedEntry, FeedFilters
+from epic_music.api.models import FeedEntry, FeedFilters, FeedSortOrders
 
 _ENTRIES_PER_PAGE = 30
 
@@ -16,10 +16,13 @@ class DatabaseCursor:
     def get_feed_entries(
         self,
         page: int = 0,
-        order_by: Literal["date_posted"] = "date_posted",
+        order_by: Literal[FeedSortOrders] = "date_posted",
         asc: bool = False,
         filters: Dict[FeedFilters, str] = {}
-    ) -> Sequence[FeedEntry]:
+    ) -> Tuple[Sequence[FeedEntry], int]:
+        stmt = select(count()).select_from(FeedEntry)
+        total = self.session.exec(stmt).one()
+
         stmt = select(FeedEntry)
         for k, v in filters.items():
             stmt = stmt.where(getattr(FeedEntry, k) == v)
@@ -28,7 +31,7 @@ class DatabaseCursor:
         stmt = stmt.order_by(order_attr.asc() if asc else order_attr.desc())
         stmt = stmt.offset(page * _ENTRIES_PER_PAGE)
 
-        return self.session.exec(stmt).all()
+        return self.session.exec(stmt).all(), total
 
     def get_latest_entry_timestamp(self) -> datetime | None:
         statement = select(max(FeedEntry.posted_at)).select_from(FeedEntry)

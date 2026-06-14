@@ -80,7 +80,7 @@ async def sync_entries() -> TaskStartResponse:
 
     return TaskStartResponse(status=status, task_id=_SYNC_TASK_ID)
 
-@app.post("/poll")
+@app.get("/poll")
 async def poll_status(task_id: str) -> TaskStatusResponse:
     """
     Returns the status of a running background task.

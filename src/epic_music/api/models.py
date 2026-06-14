@@ -19,7 +19,7 @@ class FeedEntry(SQLModel, table=True):
     album: str | None
     site_name: str
     original_url: str
-    youtube_url: str
+    youtube_id: str
     youtube_title: str
     message_id: int
     posted_by: str

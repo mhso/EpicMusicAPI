@@ -38,7 +38,7 @@ class DiscordClient(Client):
         with database_client as cursor:
             latest_msg_timestamp = cursor.get_latest_entry_timestamp()
 
-        self.latest_msg_timestamp = datetime(2026, 2, 20)#latest_msg_timestamp
+        self.latest_msg_timestamp = latest_msg_timestamp
         self.database_client = database_client
         self.api_client = api_client
         self.guild: Guild = None
@@ -92,6 +92,9 @@ class DiscordClient(Client):
             track_data = []
             async for message in self.channel.history(limit=None, after=self.latest_msg_timestamp, oldest_first=True):
                 track_data.extend(await self._handle_message(message))
+
+            if track_data == []:
+                return
 
             await on_messages_synced(track_data, self.api_client, self.database_client)
 

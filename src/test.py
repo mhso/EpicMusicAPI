@@ -5,6 +5,9 @@ import json
 from dotenv import load_dotenv
 
 from epic_music.api.requests import RateLimitAPIClient, _extract_track_info, _evaluate_lookup_result
+from epic_music.api.models import ResponseFeedEntry
+from epic_music.discbot.client import DISCORD_IDS
+from epic_music.database.client import DatabaseClient
 
 load_dotenv()
 
@@ -53,6 +56,20 @@ class ScriptRunner:
 
         result = await self.api_client.make_discogs_api_request(params)
         print(result)
+
+    async def list_entries(self):
+        with DatabaseClient() as cursor:
+            entries, total = cursor.get_feed_entries()
+
+            print(total)
+
+            for entry in entries:
+                extra = {
+                    "posted_by": DISCORD_IDS.get(entry.posted_by, "Unknown"),
+                    "avatar": "avata123",
+                }
+                model = ResponseFeedEntry.model_validate(entry, update=extra)
+                print(model.model_dump_json())
 
 if __name__ == "__main__":
     PARSER = ArgumentParser()

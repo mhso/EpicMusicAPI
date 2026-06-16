@@ -468,20 +468,6 @@ def extract_url_info(
 
     return site_name, video_id
 
-async def handle_list_entries(request: ListFeedRequest, database_client: DatabaseClient) -> ListFeedResponse:
-    """
-    Load entries from the database, optionally filtered or sorted
-    based on given parameters and with pagination support_make_request
-    """
-    with database_client as cursor:
-        entries, total = cursor.get_feed_entries(
-            request.page,
-            request.sort_by,
-            request.sort_order == "asc",
-            request.filters,
-        )
-        return ListFeedResponse(entries=list(entries), total=total)
-
 async def on_messages_synced(
     feed_entries: List[Dict[str, Any]],
     api_client: RateLimitAPIClient,

@@ -1,7 +1,9 @@
 from datetime import datetime
 from os import environ
+from threading import get_ident
 from typing import Dict, List, Literal, Sequence, Tuple
 
+from sqlalchemy import Engine
 from sqlalchemy.sql.functions import max, count
 from sqlmodel import SQLModel, Session, create_engine, select
 
@@ -10,8 +12,8 @@ from epic_music.api.models import FeedEntry, FeedFilters, FeedSortOrders
 _ENTRIES_PER_PAGE = 30
 
 class DatabaseCursor:
-    def __init__(self, session: Session):
-        self.session = session
+    def __init__(self, engine: Engine):
+        self.session = Session(engine)
 
     def get_feed_entries(
         self,
@@ -34,7 +36,7 @@ class DatabaseCursor:
         return self.session.exec(stmt).all(), total
 
     def get_latest_entry_timestamp(self) -> datetime | None:
-        statement = select(max(FeedEntry.posted_at)).select_from(FeedEntry)
+        statement = select(max(FeedEntry.date_posted)).select_from(FeedEntry)
 
         return self.session.exec(statement).one_or_none()
 
@@ -58,18 +60,24 @@ class DatabaseCursor:
 
 class DatabaseClient:
     def __init__(self) -> None:
-        self.engine = create_engine(f"sqlite:///{environ['DATABASE_PATH']}")
-        self.session: Session | None = None
-
-    def __enter__(self) -> DatabaseCursor:
-        if not self.session:
-            self.session = Session(self.engine)
+        self.engine = create_engine(f"sqlite:///{environ['RESOURCES_PATH']}/database/database.db")
+        self.cursors: Dict[int, DatabaseCursor] = {}
 
         SQLModel.metadata.create_all(bind=self.engine)
 
-        return DatabaseCursor(self.session)
+    def __enter__(self) -> DatabaseCursor:
+        thread_id = get_ident()
+        if thread_id in self.cursors:
+            return self.cursors[thread_id]
+
+        cursor = DatabaseCursor(self.engine)
+        self.cursors[get_ident()] = cursor
+
+        return cursor
 
     def __exit__(self, exc_type, exc, tb):
-        if self.session:
-            self.session.close()
-            self.session = None
+        thread_id = get_ident()
+        cursor = self.cursors.get(thread_id)
+        if cursor:
+            cursor.session.close()
+            del self.cursors[thread_id]

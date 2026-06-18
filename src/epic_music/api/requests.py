@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 import json
-from typing import Any, Dict, List, Literal, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Tuple
 from os import environ
 from urllib.parse import urlparse, parse_qs
 from time import time
@@ -10,7 +10,7 @@ from httpx import AsyncClient, Auth, DigestAuth, ReadTimeout
 from loguru import logger
 from anthropic import AsyncAnthropic
 
-from epic_music.api.models import FeedEntry, ListFeedRequest, ListFeedResponse, EntryReaction, TrackArtist, TrackGenre
+from epic_music.api.models import FeedEntry, EntryReaction, TrackArtist, TrackGenre
 from epic_music.database.client import DatabaseClient
 
 _MUSICBRANZ_BASE_URL = "https://musicbrainz.org/ws/2"
@@ -185,6 +185,9 @@ class RateLimitAPIClient:
         if not response_data:
             return {}
 
+        with open("discogz.json", "w", encoding="utf-8") as fp:
+            json.dump(response_data, fp)
+
         for entry in response_data:
             if entry["type"] != "release":
                 continue
@@ -205,7 +208,7 @@ class RateLimitAPIClient:
         track: str | None,
         artist: str | None,
         album: str | None,
-    ) -> Dict[str, str | List[str] | None]:
+    ) -> Dict[str, str | List[str]]:
         params = {}
 
         if track is not None: # Search for track
@@ -214,12 +217,16 @@ class RateLimitAPIClient:
                 params["artist"] = artist
 
             params["recording"] = track
-        else: # Search for album
+
+        elif album is not None: # Search for album
             category = "release"
             if artist is not None: # Include artist in search
                 params["artist"] = artist
 
             params["release"] = album
+        
+        else:
+            return {}
 
         terms = " AND ".join([f"{k}:{v}" for k, v in params.items()])
         query = f"query={terms}"
@@ -242,6 +249,9 @@ class RateLimitAPIClient:
 
         if response_data == []:
             return {}
+
+        with open("musicbrainz.json", "w", encoding="utf-8") as fp:
+            json.dump(response_data, fp)
 
         def _parse_date(date: str):
             try:
@@ -293,7 +303,7 @@ class RateLimitAPIClient:
         discogs_data = await self.make_discogs_api_request(params)
 
         data["album"] = data.get("album", discogs_data.get("album"))
-        data["genres"] = discogs_data.get("genres")
+        data["genres"] = discogs_data.get("genres", [])
 
         return data
 
@@ -521,7 +531,7 @@ async def on_messages_synced(
 
         reactions = [EntryReaction(**reaction_data) for reaction_data in raw_data.pop("reactions")]
         artists = [TrackArtist(artist=artist) for artist in track_data.get("artists", [])]
-        genres = [TrackGenre(genre=artist) for artist in track_data.get("genres", [])]
+        genres = [TrackGenre(genre=genre, rank=index) for index, genre in enumerate(track_data.get("genres", []))]
 
         model = FeedEntry(
             title=track_data.get("title"),
@@ -536,7 +546,8 @@ async def on_messages_synced(
             artists=artists,
             genres=genres,
         )
-        print("Extracted data:", model)
+        print("Extracted data:")
+        print(model.model_dump_json(indent=4))
 
         data_models.append(model)
 

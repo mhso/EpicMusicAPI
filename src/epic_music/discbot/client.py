@@ -1,7 +1,8 @@
 from os import environ
+from time import time
+from typing import Dict, Tuple
 
 from discord import Client, Guild, Reaction, TextChannel, Message, Forbidden, Intents
-from cachetools.func import ttl_cache
 from loguru import logger
 
 from epic_music.api.requests import RateLimitAPIClient, on_messages_synced, extract_url_info
@@ -44,6 +45,10 @@ class DiscordClient(Client):
         self.guild: Guild = None
         self.channel: TextChannel = None
 
+        self._avatar_cache: Dict[int, Tuple[float, str]] = {}
+        self._avatar_ttl = 6 * 60 * 60
+        self._avatar_cache_size = 10
+
     async def on_ready(self):
         self.guild = self.get_guild(GUILD_ID)
         self.channel = self.guild.get_channel(CHANNEL_ID)
@@ -53,19 +58,34 @@ class DiscordClient(Client):
         except Exception:
             logger.exception("Exception when syncing Discord messages!")
 
-    @ttl_cache(maxsize=10, ttl=10 * 60)  # Note: TTL value is in seconds.
     async def get_avatar(self, disc_id: int):
         guild = self.get_guild(GUILD_ID)
+        if guild is None:
+            return None
+
         member = guild.get_member(disc_id)
         if member is None or member.avatar is None:
             return None
 
-        path = f"{environ['RESOURCES_PATH']}/avatars/{disc_id}.png"
+        if disc_id in self._avatar_cache:
+            timestamp, path = self._avatar_cache[disc_id]
 
-        with open(path, "wb") as fp:
+            if time() > timestamp + self._avatar_ttl or len(self._avatar_cache) > self._avatar_cache_size:
+                del self._avatar_cache[disc_id]
+
+            else:
+                return path
+
+        path = f"img/avatars/{disc_id}.png"
+        local_path = f"{environ['STATIC_PATH']}/img/avatars/{disc_id}.png"
+        static_path = f"static/img/avatars/{disc_id}.png"
+
+        with open(local_path, "wb") as fp:
             await member.avatar.save(fp)
 
-        return path
+        self._avatar_cache[disc_id] = (time(), static_path)
+
+        return static_path
 
     async def _handle_message(self, message: Message):
         if message.channel.id != self.channel.id or message.author.id not in DISCORD_IDS:
@@ -90,7 +110,7 @@ class DiscordClient(Client):
                     "site_name": site_name,
                     "original_url": embed.url or video_url,
                     "youtube_id": youtube_id,
-                    "posted_by": DISCORD_IDS[message.author.id],
+                    "posted_by": message.author.id,
                     "date_posted": message.created_at,
                     "message_id": message.id,
                     "reactions": reactions,

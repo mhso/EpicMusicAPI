@@ -3,11 +3,11 @@ from os import environ
 from threading import get_ident
 from typing import Dict, List, Literal, Sequence, Tuple
 
-from sqlalchemy import Engine
-from sqlalchemy.sql.functions import max, count
-from sqlmodel import SQLModel, Session, create_engine, select
+from sqlalchemy import Engine, or_
+from sqlalchemy.sql.functions import max
+from sqlmodel import SQLModel, Session, create_engine, select, desc, asc
 
-from epic_music.api.models import FeedEntry, FeedFilters, FeedSortOrders
+from epic_music.api.models import EntryReaction, FeedEntry, FeedSortOrders
 
 _ENTRIES_PER_PAGE = 30
 
@@ -19,21 +19,34 @@ class DatabaseCursor:
         self,
         page: int = 0,
         order_by: Literal[FeedSortOrders] = "date_posted",
-        asc: bool = False,
-        filters: Dict[FeedFilters, str] = {}
-    ) -> Tuple[Sequence[FeedEntry], int]:
-        stmt = select(count()).select_from(FeedEntry)
-        total = self.session.exec(stmt).one()
+        order_asc: bool = False,
+        filters: Dict[str, Tuple[SQLModel, List[str]]] | None = None
+    ) -> Sequence[FeedEntry]:
+        stmt = select(FeedEntry).distinct()
+        if filters:
+            for key, (model, terms) in filters.items():
+                if not terms:
+                    continue
 
-        stmt = select(FeedEntry)
-        for k, v in filters.items():
-            stmt = stmt.where(getattr(FeedEntry, k) == v)
+                clauses = [getattr(model, key) == term for term in terms]
+                if model is not FeedEntry:
+                    stmt = stmt.join(model, getattr(model, "feed_id") == FeedEntry.id)
+
+                stmt = stmt.where(or_(*clauses))
+
+        if order_by == "reactions":
+            stmt = stmt.join(
+                EntryReaction,
+                EntryReaction.feed_id == FeedEntry.id,
+                isouter=True
+            )
 
         order_attr = getattr(FeedEntry, order_by)
-        stmt = stmt.order_by(order_attr.asc() if asc else order_attr.desc())
+        order_func = asc if order_asc else desc
+        stmt = stmt.order_by(order_func(order_attr))
         stmt = stmt.offset(page * _ENTRIES_PER_PAGE)
 
-        return self.session.exec(stmt).all(), total
+        return self.session.exec(stmt).all()
 
     def get_latest_entry_timestamp(self) -> datetime | None:
         statement = select(max(FeedEntry.date_posted)).select_from(FeedEntry)

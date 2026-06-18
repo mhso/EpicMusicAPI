@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Literal
+from typing import List, Literal
 from uuid import uuid4
 
 from pydantic.alias_generators import to_camel
@@ -34,12 +34,12 @@ class FeedEntry(FeedEntryBase, table=True):
 
     posted_by: int
 
-    artists: List["TrackArtist"] = Relationship(back_populates="feed_entry", sa_relationship_kwargs={"order_by": "TrackArtist.artist.asc()"})
-    genres: List["TrackGenre"] = Relationship(back_populates="feed_entry", sa_relationship_kwargs={"order_by": "TrackGenre.genre.asc()"})
+    artists: List["TrackArtist"] = Relationship(back_populates="feed_entry", sa_relationship_kwargs={"order_by": "TrackArtist.rank.asc()"})
+    genres: List["TrackGenre"] = Relationship(back_populates="feed_entry", sa_relationship_kwargs={"order_by": "TrackGenre.rank.asc()"})
     reactions: List["EntryReaction"] = Relationship(back_populates="feed_entry", sa_relationship_kwargs={"order_by": "EntryReaction.emoji.asc()"})
 
 class ResponseFeedEntry(FeedEntryBase):
-    avatar: str
+    avatar: str | None
     posted_by: str
 
     artists: List["TrackArtist"] = []
@@ -56,7 +56,6 @@ class ResponseFeedEntry(FeedEntryBase):
         serialized["datePosted"] = self.date_posted.isoformat()
         serialized["artists"] = [artist.artist for artist in self.artists]
         serialized["genres"] = [genre.genre for genre in self.genres]
-        serialized["reactions"] = [reaction.model_dump_json() for reaction in self.reactions]
 
         return serialized
 
@@ -65,6 +64,7 @@ class TrackArtist(SQLModel, table=True):
 
     feed_id: str | None = Field(default=None, foreign_key="feed_entries.id", primary_key=True)
     artist: str = Field(primary_key=True)
+    rank: int = Field(default=0)
 
     feed_entry: FeedEntry = Relationship(back_populates="artists")
 
@@ -75,6 +75,7 @@ class TrackGenre(SQLModel, table=True):
 
     feed_id: str | None = Field(default=None, foreign_key="feed_entries.id", primary_key=True)
     genre: str = Field(primary_key=True)
+    rank: int = Field(default=0)
 
     feed_entry: FeedEntry = Relationship(back_populates="genres")
 
@@ -91,20 +92,16 @@ class EntryReaction(SQLModel, table=True):
 
     model_config = _MODEL_CONFIG
 
-
 # /*************************\
 # | Pydantic FastAPI models |
 # \*************************/
-FeedFilters = Literal["site_name", "artist", "genre", "posted_by"]
 FeedSortOrders = Literal["date_posted", "reactions"]
 
-class ListFeedRequest(BaseModel):
-    filters: Dict[FeedFilters, str]
-    sort_by: Literal[FeedSortOrders]
-    sort_order: Literal["asc", "desc"]
-    page: int = 0
-
-    model_config = _MODEL_CONFIG
+class Filters(BaseModel):
+    site_name: List[str] = []
+    posted_by: List[str] = []
+    artist: List[str] = []
+    genre: List[str] = []
 
 class ListFeedResponse(BaseModel):
     entries: List[ResponseFeedEntry]

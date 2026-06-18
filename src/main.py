@@ -3,22 +3,25 @@ import logging
 from http import HTTPStatus
 from contextlib import asynccontextmanager
 from sys import stdout
-from typing import Dict, Literal
+from typing import Dict, List, Literal
+from os import environ
 
-from fastapi import FastAPI, Request, Response, Depends
+from fastapi import FastAPI, Request, Response, Depends, Query
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from loguru import logger
 
 from epic_music.api.requests import RateLimitAPIClient
 from epic_music.api.models import (
+    FeedEntry,
     ResponseFeedEntry,
-    ListFeedRequest,
     ListFeedResponse,
     TaskStartResponse,
     TaskStatusResponse,
-    FeedFilters,
     FeedSortOrders,
+    TrackArtist,
+    TrackGenre,
 )
 from epic_music.database.client import DatabaseClient, DatabaseCursor
 from epic_music.discbot.client import DiscordClient, DISCORD_IDS
@@ -41,14 +44,14 @@ api_client = RateLimitAPIClient()
 
 # Create and start Discord client
 logger.info("Starting Discord client...")
-discord_client = None#DiscordClient(database_client, api_client)
-discord_task = None#asyncio.create_task(discord_client.start(environ["DISCORD_TOKEN"]))
+discord_client = DiscordClient(database_client, api_client)
 
 background_tasks: Dict[str, asyncio.Task] = {}
 
 @asynccontextmanager
 async def fastapi_lifespan(app: FastAPI):
     logger.info("Starting FastAPI...")
+    discord_task = asyncio.create_task(discord_client.start(environ["DISCORD_TOKEN"]))
 
     yield
 
@@ -56,9 +59,9 @@ async def fastapi_lifespan(app: FastAPI):
     database_client.engine.dispose()
 
     logger.info("Shutting down Discord bot...")
-    # await discord_client.close()
-    # while not discord_task.done():
-    #     await asyncio.sleep(0.1)
+    await discord_client.close()
+    while not discord_task.done():
+        await asyncio.sleep(0.1)
 
 app = FastAPI(debug=True, title="Epic Music API", lifespan=fastapi_lifespan)
 
@@ -77,6 +80,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/static", StaticFiles(directory=environ["STATIC_PATH"]), name="static")
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -117,7 +122,10 @@ def _create_cursor():
 
 @app.get("/list")
 async def list_entries(
-    filters: Dict[FeedFilters, str] = {},
+    site_names: List[str] = Query([]),
+    artists: List[str] = Query([]),
+    genres: List[str] = Query([]),
+    posters: List[str] = Query([]),
     sort_by: FeedSortOrders = "date_posted",
     sort_order: Literal["asc", "desc"] = "desc",
     page: int = 0,
@@ -127,29 +135,38 @@ async def list_entries(
     Load entries from the database, optionally filtered or sorted
     based on given parameters and with pagination support
     """
-    request = ListFeedRequest(
-        filters=filters,
-        sort_by=sort_by,
-        sort_order=sort_order,
-        page=page
-    )
+    disc_id_reverse_lookup = {v: k for k, v in DISCORD_IDS.items()}
 
-    entries, total = cursor.get_feed_entries(
-        request.page,
-        request.sort_by,
-        request.sort_order == "asc",
-        request.filters,
+    filters = {
+        "site_name": (FeedEntry, site_names),
+        "posted_by": (FeedEntry, [disc_id_reverse_lookup[poster] for poster in posters]),
+        "genre": (TrackGenre, genres),
+        "artist": (TrackArtist, artists),
+    }
+
+    entries = cursor.get_feed_entries(
+        page,
+        sort_by,
+        sort_order == "asc",
+        filters
     )
 
     response_entries = []
     for entry in entries:
         extra = {
-            "posted_by": DISCORD_IDS.get(entry.posted_by, "Unknown"),
-            "avatar": await discord_client.get_avatar(entry.posted_by)
+            "posted_by": DISCORD_IDS.get(int(entry.posted_by), "Unknown"),
+            "avatar": await discord_client.get_avatar(int(entry.posted_by))
         }
         response_entries.append(ResponseFeedEntry.model_validate(entry, update=extra))
 
-    return ListFeedResponse(entries=response_entries, total=total)
+    return ListFeedResponse(entries=response_entries, total=len(entries))
+
+@app.get("/search")
+def search_in_entries(search_term: str) -> ListFeedResponse:
+    """
+    Search for entries in the database.
+    """
+    return ListFeedResponse(entries=[], total=0)
 
 @app.post("/sync")
 async def sync_entries() -> TaskStartResponse:
@@ -162,6 +179,7 @@ async def sync_entries() -> TaskStartResponse:
 
     try:
         background_tasks[_SYNC_TASK_ID] = asyncio.create_task(discord_client.sync_messages())
+        status = "success"
     except Exception:
         logger.exception("Error when creating sync task!")
         status = "error"

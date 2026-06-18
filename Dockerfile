@@ -17,6 +17,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | bash && uv sync --no-dev
 COPY .env ./.env
 COPY src ./src
 COPY resources ./resources
+COPY static ./static
 
 # Run the server
 WORKDIR /epic_music/src

@@ -1,11 +1,12 @@
 from argparse import ArgumentParser
 import asyncio
 import json
+import os
 
 from dotenv import load_dotenv
 
 from epic_music.api.requests import RateLimitAPIClient, _extract_track_info, _evaluate_lookup_result
-from epic_music.api.models import ResponseFeedEntry
+from epic_music.api.models import FeedEntry, ResponseFeedEntry, TrackGenre
 from epic_music.discbot.client import DISCORD_IDS
 from epic_music.database.client import DatabaseClient
 
@@ -13,11 +14,12 @@ load_dotenv()
 
 class ScriptRunner:
     def __init__(self) -> None:
+        os.environ["RESOURCES_PATH"] = "../resources"
         self.api_client = RateLimitAPIClient()
 
     async def extract_info(self):
-        video_title = "Linkin Park - Hybrid Theory [Full Album]"
-        youtube_id = "A2Ojfv3ziXg"
+        video_title = "Summer Mix 2026🍓May Top Playlist🍓Alan Walker, Dua Lipa, Coldplay Style🍓Best Popular Songs 2025"
+        youtube_id = "WispzhKm6hQ"
 
         video_title, channel_title = await self.api_client.make_youtube_list_request(youtube_id)
         if video_title is None:
@@ -39,37 +41,43 @@ class ScriptRunner:
 
         print(track_data)
 
-        score_content = await _evaluate_lookup_result(extracted_data_json, track_data)
-        try:
-            score_data = json.loads(score_content[0].text)
-        except json.JSONDecodeError:
-            score_data = {}
+        # score_content = await _evaluate_lookup_result(extracted_data_json, track_data)
+        # try:
+        #     score_data = json.loads(score_content[0].text)
+        # except json.JSONDecodeError:
+        #     score_data = {}
 
-        print("Score evaluated by Claude:", score_data)
+        # print("Score evaluated by Claude:", score_data)
 
     async def discogs_request(self):
         params = {
-            "token": self.api_client.discogs_token,
             "artist": "Linkin Park",
-            "release": "Hybrid Theory",
+            "release_title": "Hybrid Theory",
         }
 
         result = await self.api_client.make_discogs_api_request(params)
         print(result)
 
     async def list_entries(self):
-        with DatabaseClient() as cursor:
-            entries, total = cursor.get_feed_entries()
+        disc_id_reverse_lookup = {v: k for k, v in DISCORD_IDS.items()}
+        filters = {}
 
-            print(total)
+        with DatabaseClient() as cursor:
+            entries = cursor.get_feed_entries(
+                order_by="date_posted",
+                asc=False,
+                filters=filters
+            )
 
             for entry in entries:
                 extra = {
-                    "posted_by": DISCORD_IDS.get(entry.posted_by, "Unknown"),
-                    "avatar": "avata123",
+                    "posted_by": DISCORD_IDS.get(int(entry.posted_by), "Unknown"),
+                    "avatar": "avatar123",
                 }
                 model = ResponseFeedEntry.model_validate(entry, update=extra)
-                print(model.model_dump_json())
+                print(model.model_dump())
+
+            print(len(entries))
 
 if __name__ == "__main__":
     PARSER = ArgumentParser()

@@ -63,21 +63,47 @@ class ScriptRunner:
         filters = {}
 
         with DatabaseClient() as cursor:
-            entries = cursor.get_feed_entries(
+            entries, total = cursor.get_feed_entries(
+                page=0,
                 order_by="date_posted",
-                asc=False,
-                filters=filters
+                order_asc=False,
+                filters=filters,
             )
 
             for entry in entries:
                 extra = {
                     "posted_by": DISCORD_IDS.get(int(entry.posted_by), "Unknown"),
                     "avatar": "avatar123",
+                    "artists": entry.artists,
+                    "genres": entry.genres,
+                    "reactions": entry.reactions,
                 }
                 model = ResponseFeedEntry.model_validate(entry, update=extra)
                 print(model.model_dump())
 
-            print(len(entries))
+            print(total)
+
+    def strip_urls(self):
+        import re
+        from sqlmodel import select
+
+        pattern = re.compile(r"(http|https)\:\/\/\S+")
+
+        with DatabaseClient() as cursor:
+            entries = cursor.session.exec(select(FeedEntry)).all()
+
+            for entry in entries:
+                if not entry.message:
+                    continue
+
+                match = pattern.search(entry.message)
+                if match is None:
+                    continue
+
+                entry.message = entry.message.replace(match.group(0), "")
+
+            cursor.session.flush()
+            cursor.session.commit()
 
 if __name__ == "__main__":
     PARSER = ArgumentParser()

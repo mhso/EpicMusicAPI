@@ -4,12 +4,12 @@ from threading import get_ident
 from typing import Dict, List, Literal, Sequence, Tuple
 
 from sqlalchemy import Engine, or_
-from sqlalchemy.sql.functions import max
+from sqlalchemy.sql.functions import count, max
 from sqlmodel import SQLModel, Session, create_engine, select, desc, asc
 
 from epic_music.api.models import EntryReaction, FeedEntry, FeedSortOrders
 
-_ENTRIES_PER_PAGE = 30
+_ENTRIES_PER_PAGE = 60
 
 class DatabaseCursor:
     def __init__(self, engine: Engine):
@@ -21,8 +21,10 @@ class DatabaseCursor:
         order_by: Literal[FeedSortOrders] = "date_posted",
         order_asc: bool = False,
         filters: Dict[str, Tuple[SQLModel, List[str]]] | None = None
-    ) -> Sequence[FeedEntry]:
+    ) -> Tuple[Sequence[FeedEntry], int]:
         stmt = select(FeedEntry).distinct()
+
+        # Add filters, if any are given
         if filters:
             for key, (model, terms) in filters.items():
                 if not terms:
@@ -34,6 +36,7 @@ class DatabaseCursor:
 
                 stmt = stmt.where(or_(*clauses))
 
+        # Join reaction table, if ordering by it
         if order_by == "reactions":
             stmt = stmt.join(
                 EntryReaction,
@@ -41,12 +44,27 @@ class DatabaseCursor:
                 isouter=True
             )
 
+        cte = stmt.cte("entries")
+
+        # Add ordering clause
         order_attr = getattr(FeedEntry, order_by)
         order_func = asc if order_asc else desc
-        stmt = stmt.order_by(order_func(order_attr))
-        stmt = stmt.offset(page * _ENTRIES_PER_PAGE)
 
-        return self.session.exec(stmt).all()
+        count_stmt = select(count()).select_from(cte)
+        select_stmt = select(FeedEntry).join_from(
+            FeedEntry, cte, FeedEntry.id == cte.c.id
+        ).offset(
+            page * _ENTRIES_PER_PAGE
+        ).limit(
+            _ENTRIES_PER_PAGE
+        ).order_by(
+            order_func(order_attr)
+        )
+
+        entries = self.session.exec(select_stmt).all()
+        total = self.session.exec(count_stmt).one()
+
+        return entries, total
 
     def get_latest_entry_timestamp(self) -> datetime | None:
         statement = select(max(FeedEntry.date_posted)).select_from(FeedEntry)

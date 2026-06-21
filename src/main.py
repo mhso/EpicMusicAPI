@@ -144,11 +144,11 @@ async def list_entries(
         "artist": (TrackArtist, artists),
     }
 
-    entries = cursor.get_feed_entries(
+    entries, total = cursor.get_feed_entries(
         page,
         sort_by,
         sort_order == "asc",
-        filters
+        filters,
     )
 
     response_entries = []
@@ -159,12 +159,12 @@ async def list_entries(
         }
         response_entries.append(ResponseFeedEntry.model_validate(entry, update=extra))
 
-    return ListFeedResponse(entries=response_entries, total=len(entries))
+    return ListFeedResponse(entries=response_entries, total=total)
 
 @app.get("/search")
 def search_in_entries(search_term: str) -> ListFeedResponse:
     """
-    Search for entries in the database.
+    Search for entries in the database in a hypertextualized way.
     """
     return ListFeedResponse(entries=[], total=0)
 

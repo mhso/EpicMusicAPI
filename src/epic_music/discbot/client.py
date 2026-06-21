@@ -1,6 +1,7 @@
 from os import environ
 from time import time
 from typing import Dict, Tuple
+from re import compile, Pattern
 
 from discord import Client, Guild, Reaction, TextChannel, Message, Forbidden, Intents
 from loguru import logger
@@ -87,6 +88,16 @@ class DiscordClient(Client):
 
         return static_path
 
+    def _strip_urls_from_message(self, content: str, pattern: Pattern):
+        if not content:
+            return None
+
+        match = pattern.search(content)
+        if match is None:
+            return content
+
+        return content.replace(match.group(0), "")
+
     async def _handle_message(self, message: Message):
         if message.channel.id != self.channel.id or message.author.id not in DISCORD_IDS:
             return []
@@ -98,6 +109,8 @@ class DiscordClient(Client):
             }
             for reaction in message.reactions
         ]
+
+        url_pattern = compile(r"(http|https)\:\/\/\S+")
 
         track_data = []
         for embed in message.embeds:
@@ -112,14 +125,27 @@ class DiscordClient(Client):
                     "youtube_id": youtube_id,
                     "posted_by": message.author.id,
                     "date_posted": message.created_at,
+                    "message": self._strip_urls_from_message(message.content, url_pattern),
                     "message_id": message.id,
                     "reactions": reactions,
                 }
 
-                print("Raw data:", raw_data)
+                print(f"Raw data for msg from {message.created_at}:", raw_data)
                 track_data.append(raw_data)
 
         return track_data
+
+    async def _add_message_data(self):
+        from sqlalchemy import update
+        from epic_music.api.models import FeedEntry
+
+        with self.database_client as cursor:
+            async for message in self.channel.history(limit=None, oldest_first=True):
+                cursor.session.exec(update(FeedEntry).where(FeedEntry.message_id == message.id).values(message=message.content))
+
+            cursor.session.commit()
+
+        print("DONE")
 
     async def sync_messages(self):
         try:

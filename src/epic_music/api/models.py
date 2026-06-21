@@ -24,6 +24,7 @@ class FeedEntryBase(SQLModel):
     original_url: str
     youtube_id: str
     youtube_title: str
+    message: str | None
     message_id: int
     date_posted: datetime = Field(default_factory=lambda: datetime.now())
 

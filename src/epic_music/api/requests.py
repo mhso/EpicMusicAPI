@@ -377,7 +377,7 @@ Output: {processed_json}
 Evaluate whether the output has captured the correct track/album and artist from the input.
 Put emphasis on the keys 'artist' and 'track', if they are present.
 
-Give a score between 0 and 1 where 0 means nothing matches and 1 is a perfect match."""
+Give a score between 0 and 1, where 0 means nothing matches and 1 means a perfect match."""
 
     message = await client.messages.create(
         max_tokens=1024,
@@ -542,12 +542,16 @@ async def on_messages_synced(
             youtube_title=video_title,
             message_id=raw_data["message_id"],
             posted_by=raw_data["posted_by"],
+            date_posted=raw_data["date_posted"],
             reactions=reactions,
             artists=artists,
             genres=genres,
         )
         print("Extracted data:")
         print(model.model_dump_json(indent=4))
+        print("Artists:", [artist.model_dump() for artist in model.artists])
+        print("Genres:", [genre.model_dump() for genre in model.genres])
+        print("Reactions:", [reaction.model_dump() for reaction in model.reactions])
 
         data_models.append(model)
 

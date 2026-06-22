@@ -1,13 +1,13 @@
 from datetime import datetime
 from os import environ
 from threading import get_ident
-from typing import Dict, List, Literal, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Tuple
 
-from sqlalchemy import Engine, or_
-from sqlalchemy.sql.functions import count, max
-from sqlmodel import SQLModel, Session, create_engine, select, desc, asc
+from sqlalchemy import Engine, or_, text
+from sqlalchemy.sql.functions import count, sum, max
+from sqlmodel import SQLModel, Session, create_engine, select, desc, asc, distinct
 
-from epic_music.api.models import EntryReaction, FeedEntry, FeedSortOrders
+from epic_music.api.models import  FeedEntry, TrackArtist, TrackGenre, EntryReaction, FeedSortOrders
 
 _ENTRIES_PER_PAGE = 60
 
@@ -21,8 +21,16 @@ class DatabaseCursor:
         order_by: Literal[FeedSortOrders] = "date_posted",
         order_asc: bool = False,
         filters: Dict[str, Tuple[SQLModel, List[str]]] | None = None
-    ) -> Tuple[Sequence[FeedEntry], int]:
-        stmt = select(FeedEntry).distinct()
+    ) -> Dict[str, Any]:
+        stmt = select(
+            FeedEntry
+        ).distinct().join(
+            TrackArtist, TrackArtist.feed_id == FeedEntry.id, isouter=True
+        ).join(
+            TrackGenre, TrackGenre.feed_id == FeedEntry.id, isouter=True
+        ).join(
+            EntryReaction, EntryReaction.feed_id == FeedEntry.id, isouter=True
+        )
 
         # Add filters, if any are given
         if filters:
@@ -31,40 +39,48 @@ class DatabaseCursor:
                     continue
 
                 clauses = [getattr(model, key) == term for term in terms]
-                if model is not FeedEntry:
-                    stmt = stmt.join(model, getattr(model, "feed_id") == FeedEntry.id)
-
                 stmt = stmt.where(or_(*clauses))
 
-        # Join reaction table, if ordering by it
         if order_by == "reactions":
-            stmt = stmt.join(
-                EntryReaction,
-                EntryReaction.feed_id == FeedEntry.id,
-                isouter=True
-            )
+            sub_query = select(EntryReaction.feed_id, sum(EntryReaction.count)).group_by(EntryReaction.feed_id).subquery("sub")
+            stmt = stmt.join(sub_query, sub_query.c.feed_id == FeedEntry.id, isouter=True)
+            order_attr = text("sub.sum_1")
+        else:
+            order_attr = getattr(FeedEntry, order_by)
 
-        cte = stmt.cte("entries")
-
-        # Add ordering clause
-        order_attr = getattr(FeedEntry, order_by)
         order_func = asc if order_asc else desc
 
-        count_stmt = select(count()).select_from(cte)
-        select_stmt = select(FeedEntry).join_from(
-            FeedEntry, cte, FeedEntry.id == cte.c.id
-        ).offset(
+        # Select clause for the results
+        sub_query = stmt.subquery()
+        count_stmt = select(count(distinct(sub_query.c.id))).select_from(sub_query)
+        select_stmt = stmt.offset(
             page * _ENTRIES_PER_PAGE
         ).limit(
             _ENTRIES_PER_PAGE
-        ).order_by(
-            order_func(order_attr)
-        )
+        ).order_by(order_func(order_attr))
+
+        # Select clause for unique artists
+        artists_stmt = select(TrackArtist.artist).order_by(TrackArtist.artist).distinct()
+
+        # Select clause for unique genres
+        genres_stmt = select(TrackGenre.genre).order_by(TrackGenre.genre).distinct()
+
+        # Select clause for unique posters
+        posters_stmt = select(FeedEntry.posted_by).order_by(FeedEntry.posted_by).distinct()
 
         entries = self.session.exec(select_stmt).all()
+        unique_artists = self.session.exec(artists_stmt).all()
+        unique_genres = self.session.exec(genres_stmt).all()
+        unique_posters = self.session.exec(posters_stmt).all()
         total = self.session.exec(count_stmt).one()
 
-        return entries, total
+        return {
+            "entries": entries,
+            "unique_artists": list(unique_artists),
+            "unique_genres": list(unique_genres),
+            "unique_posters": list(unique_posters),
+            "total": total
+        }
 
     def get_latest_entry_timestamp(self) -> datetime | None:
         statement = select(max(FeedEntry.date_posted)).select_from(FeedEntry)

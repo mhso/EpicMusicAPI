@@ -106,6 +106,9 @@ class Filters(BaseModel):
 
 class ListFeedResponse(BaseModel):
     entries: List[ResponseFeedEntry]
+    unique_artists: List[str]
+    unique_genres: List[str]
+    unique_posters: List[str]
     total: int
 
 class TaskStartResponse(BaseModel):

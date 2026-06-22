@@ -85,12 +85,19 @@ app.mount("/static", StaticFiles(directory=environ["STATIC_PATH"]), name="static
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    response = None
-    request_str = request.method
+    path = request.url.path
+    if request.url.query:
+        path += f"?{request.url.query}"
+    if request.url.fragment:
+        path += f"#{request.url.fragment}"
 
+    request_str = f"{request.method} {path}"
+
+    response = None
     try:
         response: Response = await call_next(request)
     finally:
+
         if response:
             if response.status_code < 300:
                 color = "green"
@@ -102,17 +109,11 @@ async def log_requests(request: Request, call_next):
             status_code = response.status_code
             status_name = HTTPStatus(status_code).phrase
 
-            path = request.url.path
-            if request.url.query:
-                path += f"?{request.url.query}"
-            if request.url.fragment:
-                path += f"#{request.url.fragment}"
-
-            request_str += f"{path} - <{color}>{status_code} {status_name}</{color}>"
+            request_str += f" - <{color}>{status_code} {status_name}</{color}>"
         else:
-            request_str += "<red>500 Internal Server Error</red>"
+            request_str += " - <red>500 Internal Server Error</red>"
 
-        logger.debug(f"{request.method} {request_str}")
+        logger.debug(f"{request_str}")
 
     return response
 
@@ -144,7 +145,7 @@ async def list_entries(
         "artist": (TrackArtist, artists),
     }
 
-    entries, total = cursor.get_feed_entries(
+    feed_data = cursor.get_feed_entries(
         page,
         sort_by,
         sort_order == "asc",
@@ -152,14 +153,17 @@ async def list_entries(
     )
 
     response_entries = []
-    for entry in entries:
+    for entry in feed_data["entries"]:
         extra = {
-            "posted_by": DISCORD_IDS.get(int(entry.posted_by), "Unknown"),
-            "avatar": await discord_client.get_avatar(int(entry.posted_by))
+            "posted_by": DISCORD_IDS.get(entry.posted_by, "Unknown"),
+            "avatar": await discord_client.get_avatar(entry.posted_by)
         }
         response_entries.append(ResponseFeedEntry.model_validate(entry, update=extra))
 
-    return ListFeedResponse(entries=response_entries, total=total)
+    feed_data["entries"] = response_entries
+    feed_data["unique_posters"] = [DISCORD_IDS.get(poster, "Unknown") for poster in feed_data["unique_posters"]]
+
+    return ListFeedResponse(**feed_data)
 
 @app.get("/search")
 def search_in_entries(search_term: str) -> ListFeedResponse:

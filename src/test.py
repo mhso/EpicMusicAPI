@@ -63,14 +63,14 @@ class ScriptRunner:
         filters = {}
 
         with DatabaseClient() as cursor:
-            entries, total = cursor.get_feed_entries(
+            data = cursor.get_feed_entries(
                 page=0,
                 order_by="date_posted",
-                order_asc=False,
+                order_asc=True,
                 filters=filters,
             )
 
-            for entry in entries:
+            for entry in data["entries"]:
                 extra = {
                     "posted_by": DISCORD_IDS.get(int(entry.posted_by), "Unknown"),
                     "avatar": "avatar123",
@@ -81,7 +81,7 @@ class ScriptRunner:
                 model = ResponseFeedEntry.model_validate(entry, update=extra)
                 print(model.model_dump())
 
-            print(total)
+            print(data["total"])
 
     def strip_urls(self):
         import re

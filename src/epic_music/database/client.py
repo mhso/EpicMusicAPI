@@ -5,9 +5,10 @@ from typing import Any, Dict, List, Literal, Tuple
 
 from sqlalchemy import Engine, or_, text
 from sqlalchemy.sql.functions import count, sum, max
+from sqlalchemy.dialects.sqlite import insert
 from sqlmodel import SQLModel, Session, create_engine, select, desc, asc, distinct
 
-from epic_music.api.models import  FeedEntry, TrackArtist, TrackGenre, EntryReaction, FeedSortOrders
+from epic_music.api.models import  FeedEntry, TrackArtist, TrackGenre, EntryReaction, FeedSortOrders, User
 
 _ENTRIES_PER_PAGE = 60
 
@@ -104,6 +105,19 @@ class DatabaseCursor:
                 break
 
         self.session.commit()
+
+    def insert_users_if_missing(self, discord_ids: List[int]):
+        for disc_id in discord_ids:
+            stmt = insert(User).values(id=disc_id).on_conflict_do_nothing(index_elements=["id"])
+            self.session.exec(stmt)
+
+        self.session.commit()
+
+    def get_user_token(self, disc_id: int):
+        return self.session.exec(select(User.token).where(User.id == disc_id)).one_or_none()
+
+    def get_user_by_token(self, token: str):
+        return self.session.exec(select(User.id).where(User.token == token)).one_or_none()
 
 class DatabaseClient:
     def __init__(self) -> None:

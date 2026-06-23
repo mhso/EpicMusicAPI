@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import List, Literal
 from uuid import uuid4
 
+from discord import Enum
 from pydantic.alias_generators import to_camel
 from pydantic import BaseModel, model_serializer, SerializerFunctionWrapHandler
 
@@ -12,6 +13,10 @@ _MODEL_CONFIG: SQLModelConfig = {
     "alias_generator": to_camel,
     "populate_by_name": True,
 }
+
+class Environment(Enum):
+    DEVELOPMENT = "dev"
+    PRODUCTION = "prod"
 
 # /*************************\
 #  |      SQLA Models       |
@@ -93,6 +98,14 @@ class EntryReaction(SQLModel, table=True):
 
     model_config = _MODEL_CONFIG
 
+class User(SQLModel, table=True):
+    __tablename__: str = "users"
+
+    id: int = Field(primary_key=True)
+    token: str = Field(default_factory=lambda: str(uuid4()))
+
+    model_config = _MODEL_CONFIG
+
 # /*************************\
 # | Pydantic FastAPI models |
 # \*************************/
@@ -121,3 +134,6 @@ class TaskStatusResponse(BaseModel):
     status: Literal["success", "running", "missing", "error"]
 
     model_config = _MODEL_CONFIG
+
+class Cookies(BaseModel):
+    epic_music_token: str | None = None

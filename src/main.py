@@ -6,7 +6,7 @@ from sys import stdout
 from typing import Dict, List, Literal
 from os import environ
 
-from fastapi import FastAPI, Request, Response, Depends, Query
+from fastapi import Cookie, FastAPI, HTTPException, Header, Request, Response, Depends, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -22,6 +22,7 @@ from epic_music.api.models import (
     FeedSortOrders,
     TrackArtist,
     TrackGenre,
+    Cookies,
 )
 from epic_music.database.client import DatabaseClient, DatabaseCursor
 from epic_music.discbot.client import DiscordClient, DISCORD_IDS
@@ -51,7 +52,12 @@ background_tasks: Dict[str, asyncio.Task] = {}
 @asynccontextmanager
 async def fastapi_lifespan(app: FastAPI):
     logger.info("Starting FastAPI...")
-    discord_task = asyncio.create_task(discord_client.start(environ["DISCORD_TOKEN"]))
+    
+    logger.info("Starting Discord bot...")
+    await discord_client.login(environ["DISCORD_TOKEN"])
+    discord_task = asyncio.create_task(discord_client.connect())
+
+    await discord_client.wait_until_ready()
 
     yield
 
@@ -121,8 +127,22 @@ def _create_cursor():
     with database_client as cursor:
         return cursor
 
+def _verify_token(authentication: str = Header()):
+    if not authentication:
+        raise HTTPException(401, detail="Missing access token.")
+
+    if not authentication.startswith("Bearer "):
+        raise HTTPException(401, detail="Invalid access token.")
+
+    token = authentication.removeprefix("Bearer ")
+
+    with database_client as cursor:
+        if cursor.get_user_by_token(token) is None:
+            raise HTTPException(401, detail="Unauthorized.")
+
 @app.get("/list")
 async def list_entries(
+    response: Response,
     site_names: List[str] = Query([]),
     artists: List[str] = Query([]),
     genres: List[str] = Query([]),
@@ -130,7 +150,9 @@ async def list_entries(
     sort_by: FeedSortOrders = "date_posted",
     sort_order: Literal["asc", "desc"] = "desc",
     page: int = 0,
-    cursor: DatabaseCursor = Depends(_create_cursor)
+    cursor: DatabaseCursor = Depends(_create_cursor),
+    token: str = Depends(_verify_token),
+    cookies: Cookies = Cookie(),
 ) -> ListFeedResponse:
     """
     Load entries from the database, optionally filtered or sorted
@@ -163,16 +185,19 @@ async def list_entries(
     feed_data["entries"] = response_entries
     feed_data["unique_posters"] = [DISCORD_IDS.get(poster, "Unknown") for poster in feed_data["unique_posters"]]
 
+    if not cookies.epic_music_token:
+        response.set_cookie("epic_music_token", token, max_age=60 * 60 * 24 * 365)#, secure=True, httponly=True)
+
     return ListFeedResponse(**feed_data)
 
-@app.get("/search")
-def search_in_entries(search_term: str) -> ListFeedResponse:
+@app.get("/search", dependencies=[Depends(_verify_token)])
+def search_in_entries(search_term: str, token: str) -> ListFeedResponse:
     """
     Search for entries in the database in a hypertextualized way.
     """
     return ListFeedResponse(entries=[], total=0)
 
-@app.post("/sync")
+@app.post("/sync", dependencies=[Depends(_verify_token)])
 async def sync_entries() -> TaskStartResponse:
     """
     Initialize a sync of entries. Reads new messages from Discord feed
@@ -190,7 +215,7 @@ async def sync_entries() -> TaskStartResponse:
 
     return TaskStartResponse(status=status, task_id=_SYNC_TASK_ID)
 
-@app.get("/poll")
+@app.get("/poll", dependencies=[Depends(_verify_token)])
 async def poll_status(task_id: str) -> TaskStatusResponse:
     """
     Returns the status of a running background task.

@@ -1,12 +1,14 @@
 from os import environ
 from time import time
-from typing import Dict, Tuple
+from typing import Any, Callable, Dict, Tuple
 from re import compile, Pattern
 
-from discord import Client, Guild, Reaction, TextChannel, Message, Forbidden, Intents
+from discord import Client, Guild, Member, Reaction, TextChannel, Message, Forbidden, Intents, User
+from discord.client import Coro
 from loguru import logger
 
 from epic_music.api.requests import RateLimitAPIClient, on_messages_synced, extract_url_info
+from epic_music.api.models import Environment
 from epic_music.database.client import DatabaseClient
 
 DISCORD_IDS = {
@@ -17,8 +19,14 @@ DISCORD_IDS = {
     230973018707329026: "Fronk", # Frank
     252802093654474752: "Mogens" # Magnus
 }
+
+# Arbedsplads
 GUILD_ID = 418753222560186371
 CHANNEL_ID = 483937471135088640
+
+# Test guild
+TEST_GUILD_ID = 512363920044982272
+TEST_CHANNEL_ID = 512363920044982274
 
 class DiscordClient(Client):
     def __init__(
@@ -39,20 +47,25 @@ class DiscordClient(Client):
 
         with database_client as cursor:
             latest_msg_timestamp = cursor.get_latest_entry_timestamp()
+            cursor.insert_users_if_missing(list(DISCORD_IDS.keys()))
 
         self.latest_msg_timestamp = latest_msg_timestamp
         self.database_client = database_client
         self.api_client = api_client
         self.guild: Guild = None
         self.channel: TextChannel = None
+        self.environment = Environment(environ["ENVIRONMENT"])
 
         self._avatar_cache: Dict[int, Tuple[float, str]] = {}
         self._avatar_ttl = 6 * 60 * 60
         self._avatar_cache_size = 10
 
     async def on_ready(self):
-        self.guild = self.get_guild(GUILD_ID)
-        self.channel = self.guild.get_channel(CHANNEL_ID)
+        guild_id = TEST_GUILD_ID if self.environment is Environment.DEVELOPMENT else GUILD_ID
+        channel_id = TEST_CHANNEL_ID if self.environment is Environment.DEVELOPMENT else CHANNEL_ID
+
+        self.guild = self.get_guild(guild_id)
+        self.channel = self.guild.get_channel(channel_id)
 
         try:
             await self.sync_messages()
@@ -60,11 +73,10 @@ class DiscordClient(Client):
             logger.exception("Exception when syncing Discord messages!")
 
     async def get_avatar(self, disc_id: int):
-        guild = self.get_guild(GUILD_ID)
-        if guild is None:
+        if self.guild is None:
             return None
 
-        member = guild.get_member(disc_id)
+        member = self.guild.get_member(disc_id)
         if member is None or member.avatar is None:
             return None
 
@@ -87,6 +99,30 @@ class DiscordClient(Client):
         self._avatar_cache[disc_id] = (time(), static_path)
 
         return static_path
+
+    async def find_emoji(self, name: str):
+        for emoji in self.guild.emojis:
+            if emoji.name == name:
+                return emoji
+
+        return None
+
+    async def send_authorization_url(self, user: User | Member):
+        with self.database_client as cursor:
+            user_token = cursor.get_user_token(user.id)
+
+        if user_token is None:
+            return False
+
+        message = (
+            "God aften kære kollega\n\n"
+            "Her er dit super hemmelige link til #epic-music webzonen:\n"
+            f"https://mhooge.com/epic-music?token={user_token}"
+        )
+
+        await user.send(message)
+
+        return True
 
     def _strip_urls_from_message(self, content: str, pattern: Pattern):
         if not content:
@@ -162,11 +198,23 @@ class DiscordClient(Client):
             logger.exception("Insufficient permissions to read Discord messages!")
 
     async def on_message(self, message: Message):
-        track_data = await self._handle_message(message)
-        if track_data == []:
+        if message.channel.guild != self.guild:
             return
 
-        await on_messages_synced(track_data, self.api_client, self.database_client)
+        if message.content.strip() == "!epic-music":
+            try:
+                if not await self.send_authorization_url(message.author):
+                    response = f"Du har desværre ikke adgang til #epic-music webzonen {self.find_emoji('frank')}"
+                    await message.channel.send(response)
+            except Exception:
+                pass
+
+        if message.channel != self.channel:
+            return
+
+        track_data = await self._handle_message(message)
+        if track_data != []:
+            await on_messages_synced(track_data, self.api_client, self.database_client)
 
     async def on_reaction_add(self, reaction: Reaction, user):
         with self.database_client as cursor:

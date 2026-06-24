@@ -140,6 +140,8 @@ def _verify_token(authentication: str = Header()):
         if cursor.get_user_by_token(token) is None:
             raise HTTPException(401, detail="Unauthorized.")
 
+    return token
+
 @app.get("/list")
 async def list_entries(
     response: Response,

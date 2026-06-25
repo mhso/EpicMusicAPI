@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from http import HTTPStatus
 from contextlib import asynccontextmanager
 from sys import stdout
@@ -182,6 +183,20 @@ async def list_entries(
             "posted_by": DISCORD_IDS.get(entry.posted_by, "Unknown"),
             "avatar": await discord_client.get_avatar(entry.posted_by)
         }
+
+        for reaction in entry.reactions:
+            if (match := re.match(r"\<a?\:(.+)\:(\d+)\>", reaction.emoji)):
+                emoji_id = int(match.group(2))
+                emoji = discord_client.get_emoji(emoji_id)
+                if emoji is None or not emoji.available or emoji.animated:
+                    emoji_fmt = "❓"
+                else:
+                    emoji_fmt = emoji.url
+            else:
+                emoji_fmt = reaction.emoji
+
+            reaction.emoji = emoji_fmt
+
         response_entries.append(ResponseFeedEntry.model_validate(entry, update=extra))
 
     feed_data["entries"] = response_entries

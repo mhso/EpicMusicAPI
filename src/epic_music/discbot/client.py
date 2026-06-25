@@ -73,6 +73,7 @@ class DiscordClient(Client):
             logger.exception("Exception when syncing Discord messages!")
 
     async def get_avatar(self, disc_id: int):
+        print("Getting avatar for", disc_id)
         if self.guild is None:
             return None
 
@@ -99,13 +100,6 @@ class DiscordClient(Client):
         self._avatar_cache[disc_id] = (time(), static_path)
 
         return static_path
-
-    async def find_emoji(self, name: str):
-        for emoji in self.guild.emojis:
-            if emoji.name == name:
-                return emoji
-
-        return None
 
     async def send_authorization_url(self, user: User | Member):
         with self.database_client as cursor:

@@ -2,6 +2,7 @@ from argparse import ArgumentParser
 import asyncio
 import json
 import os
+import re
 
 from dotenv import load_dotenv
 
@@ -65,8 +66,8 @@ class ScriptRunner:
         with DatabaseClient() as cursor:
             data = cursor.get_feed_entries(
                 page=0,
-                order_by="date_posted",
-                order_asc=True,
+                order_by="reactions",
+                order_asc=False,
                 filters=filters,
             )
 
@@ -74,11 +75,19 @@ class ScriptRunner:
                 extra = {
                     "posted_by": DISCORD_IDS.get(int(entry.posted_by), "Unknown"),
                     "avatar": "avatar123",
-                    "artists": entry.artists,
-                    "genres": entry.genres,
-                    "reactions": entry.reactions,
                 }
+
+                for reaction in entry.reactions:
+                    if (search := re.match(r"\<a?\:(.+)\:\d+\>", reaction.emoji)):
+                        print("YES!", search)
+                        emoji_fmt = search.group(1)
+                    else:
+                        emoji_fmt = reaction.emoji
+
+                reaction.emoji = emoji_fmt
+
                 model = ResponseFeedEntry.model_validate(entry, update=extra)
+
                 print(model.model_dump())
 
             print(data["total"])

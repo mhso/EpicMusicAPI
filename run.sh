@@ -19,6 +19,7 @@ podman run \
     --memory-reservation 3g \
     -v ./log:/epic_music/log \
     -v ./resources/database:/epic_music/resources/database \
+    -v ./static/img/avatars:/epic_music/static/img/avatars \
     epic_music_api:latest
 
 popd

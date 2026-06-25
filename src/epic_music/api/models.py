@@ -58,6 +58,7 @@ class ResponseFeedEntry(FeedEntryBase):
     ) -> dict[str, object]:
         serialized = handler(self)
 
+        serialized["message"] = self.message.strip() if self.message else self.message
         serialized["avatar"] = self.avatar
         serialized["datePosted"] = self.date_posted.isoformat()
         serialized["artists"] = [artist.artist for artist in self.artists]

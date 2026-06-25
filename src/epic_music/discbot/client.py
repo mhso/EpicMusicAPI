@@ -73,7 +73,6 @@ class DiscordClient(Client):
             logger.exception("Exception when syncing Discord messages!")
 
     async def get_avatar(self, disc_id: int):
-        print("Getting avatar for", disc_id)
         if self.guild is None:
             return None
 
@@ -117,6 +116,13 @@ class DiscordClient(Client):
         await user.send(message)
 
         return True
+
+    def _find_emoji(self, name: str):
+        for emoji in self.guild.emojis:
+            if emoji.name == name:
+                return emoji
+            
+        return None
 
     def _strip_urls_from_message(self, content: str, pattern: Pattern):
         if not content:
@@ -165,18 +171,6 @@ class DiscordClient(Client):
 
         return track_data
 
-    async def _add_message_data(self):
-        from sqlalchemy import update
-        from epic_music.api.models import FeedEntry
-
-        with self.database_client as cursor:
-            async for message in self.channel.history(limit=None, oldest_first=True):
-                cursor.session.exec(update(FeedEntry).where(FeedEntry.message_id == message.id).values(message=message.content))
-
-            cursor.session.commit()
-
-        print("DONE")
-
     async def sync_messages(self):
         try:
             track_data = []
@@ -198,7 +192,7 @@ class DiscordClient(Client):
         if message.content.strip() == "!epic-music":
             try:
                 if not await self.send_authorization_url(message.author):
-                    response = f"Du har desværre ikke adgang til #epic-music webzonen {self.find_emoji('frank')}"
+                    response = f"Du har desværre ikke adgang til #epic-music webzonen {self._find_emoji('frank')}"
                     await message.channel.send(response)
             except Exception:
                 pass

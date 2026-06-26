@@ -3,7 +3,7 @@ from os import environ
 from threading import get_ident
 from typing import Any, Dict, List, Literal, Tuple
 
-from sqlalchemy import Engine, or_, text
+from sqlalchemy import Engine, delete, or_, text
 from sqlalchemy.sql.functions import count, sum, max
 from sqlalchemy.dialects.sqlite import insert
 from sqlmodel import SQLModel, Session, create_engine, select, desc, asc, distinct
@@ -95,14 +95,22 @@ class DatabaseCursor:
     def update_reaction_count(self, message_id: int, emoji: str, count: int):
         stmt_1 = select(FeedEntry).where(FeedEntry.message_id == message_id)
 
-        result = self.session.exec(stmt_1).one_or_none()
-        if result is None:
+        feed_entry = self.session.exec(stmt_1).one_or_none()
+        if feed_entry is None:
             return
 
-        for reaction_model in result.reactions:
+        model = None
+        for reaction_model in feed_entry.reactions:
             if reaction_model.emoji == emoji:
-                reaction_model.count = count
+                model = reaction_model
                 break
+
+        if model is None:
+            self.session.add(EntryReaction(feed_id=feed_entry.id, emoji=emoji, count=count))
+        elif count == 0:
+            self.session.delete(model)
+        else:
+            reaction_model.count = count
 
         self.session.commit()
 

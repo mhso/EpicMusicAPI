@@ -45,7 +45,6 @@ logger.info("Starting API client...")
 api_client = RateLimitAPIClient()
 
 # Create and start Discord client
-logger.info("Starting Discord client...")
 discord_client = DiscordClient(database_client, api_client)
 
 background_tasks: Dict[str, asyncio.Task] = {}
@@ -70,7 +69,7 @@ async def fastapi_lifespan(app: FastAPI):
     while not discord_task.done():
         await asyncio.sleep(0.1)
 
-app = FastAPI(debug=True, title="Epic Music API", lifespan=fastapi_lifespan)
+app = FastAPI(title="Epic Music API", lifespan=fastapi_lifespan, root_path="/epic-music-api")
 
 loggers = (
     logging.getLogger(name)
@@ -82,7 +81,7 @@ for uvicorn_logger in loggers:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["https://mhooge.com:5008/epic-music"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -183,21 +182,18 @@ async def list_entries(
             "posted_by": DISCORD_IDS.get(entry.posted_by, "Unknown"),
             "avatar": await discord_client.get_avatar(entry.posted_by)
         }
+        response_entry = ResponseFeedEntry.model_validate(entry, update=extra)
 
-        for reaction in entry.reactions:
+        for reaction in response_entry.reactions:
             if (match := re.match(r"\<a?\:(.+)\:(\d+)\>", reaction.emoji)):
                 emoji_id = int(match.group(2))
                 emoji = discord_client.get_emoji(emoji_id)
                 if emoji is None or not emoji.available or emoji.animated:
-                    emoji_fmt = "❓"
+                    reaction.emoji = "❓"
                 else:
-                    emoji_fmt = emoji.url
-            else:
-                emoji_fmt = reaction.emoji
+                    reaction.emoji_url = emoji.url
 
-            reaction.emoji = emoji_fmt
-
-        response_entries.append(ResponseFeedEntry.model_validate(entry, update=extra))
+        response_entries.append(response_entry)
 
     feed_data["entries"] = response_entries
     feed_data["unique_posters"] = [DISCORD_IDS.get(poster, "Unknown") for poster in feed_data["unique_posters"]]

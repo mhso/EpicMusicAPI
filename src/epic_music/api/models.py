@@ -50,7 +50,7 @@ class ResponseFeedEntry(FeedEntryBase):
 
     artists: List["TrackArtist"] = []
     genres: List["TrackGenre"] = []
-    reactions: List["EntryReaction"] = []
+    reactions: List["ResponseEntryReaction"] = []
 
     @model_serializer(mode="wrap")
     def serialize_model(
@@ -88,7 +88,10 @@ class TrackGenre(SQLModel, table=True):
 
     model_config = _MODEL_CONFIG
 
-class EntryReaction(SQLModel, table=True):
+class EntryReactionBase(SQLModel):
+    emoji: str = Field(primary_key=True)
+
+class EntryReaction(EntryReactionBase, table=True):
     __tablename__: str = "entry_reactions"
 
     feed_id: str | None = Field(default=None, foreign_key="feed_entries.id", primary_key=True)
@@ -98,6 +101,9 @@ class EntryReaction(SQLModel, table=True):
     feed_entry: FeedEntry = Relationship(back_populates="reactions")
 
     model_config = _MODEL_CONFIG
+
+class ResponseEntryReaction(EntryReactionBase):
+    emoji_url: str | None = None
 
 class User(SQLModel, table=True):
     __tablename__: str = "users"

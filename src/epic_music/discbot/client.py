@@ -177,6 +177,8 @@ class DiscordClient(Client):
             async for message in self.channel.history(limit=None, after=self.latest_msg_timestamp, oldest_first=True):
                 track_data.extend(await self._handle_message(message))
 
+            logger.info(f"Found {len(track_data)} new tracks in #epic-music")
+
             if track_data == []:
                 return
 

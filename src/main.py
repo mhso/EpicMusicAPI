@@ -24,6 +24,7 @@ from epic_music.api.models import (
     TrackArtist,
     TrackGenre,
     Cookies,
+    UserResponse,
 )
 from epic_music.database.client import DatabaseClient, DatabaseCursor
 from epic_music.discbot.client import DiscordClient, DISCORD_IDS
@@ -242,3 +243,12 @@ async def poll_status(task_id: str) -> TaskStatusResponse:
         status = "running"
 
     return TaskStatusResponse(status=status)
+
+@app.get("/user")
+def active_user(token = Depends(_verify_token)):
+    with database_client as cursor:
+        disc_id = cursor.get_user_by_token(token)
+
+    name = DISCORD_IDS.get(disc_id) if disc_id else None
+
+    return UserResponse(name=name)

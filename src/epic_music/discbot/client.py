@@ -191,11 +191,14 @@ class DiscordClient(Client):
         if message.channel.guild != self.guild:
             return
 
-        if message.content.strip() == "!epic-music":
+        if message.content.strip().lower() == "!epic-music":
             try:
-                if not await self.send_authorization_url(message.author):
+                if await self.send_authorization_url(message.author):
+                    response = f"Du har nu modtaget en hemmelig invitation til #epic-music webzonen {self._find_emoji('julemokle')}"
+                else:
                     response = f"Du har desværre ikke adgang til #epic-music webzonen {self._find_emoji('frank')}"
-                    await message.channel.send(response)
+
+                await message.channel.send(response)
             except Exception:
                 pass
 

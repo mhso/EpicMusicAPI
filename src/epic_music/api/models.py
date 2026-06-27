@@ -118,6 +118,9 @@ class User(SQLModel, table=True):
 # \*************************/
 FeedSortOrders = Literal["date_posted", "reactions"]
 
+class Cookies(BaseModel):
+    epic_music_token: str | None = None
+
 class Filters(BaseModel):
     site_name: List[str] = []
     posted_by: List[str] = []
@@ -142,5 +145,5 @@ class TaskStatusResponse(BaseModel):
 
     model_config = _MODEL_CONFIG
 
-class Cookies(BaseModel):
-    epic_music_token: str | None = None
+class UserResponse(BaseModel):
+    name: str | None

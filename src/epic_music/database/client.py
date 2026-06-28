@@ -3,7 +3,7 @@ from os import environ
 from threading import get_ident
 from typing import Any, Dict, List, Literal, Tuple
 
-from sqlalchemy import Engine, delete, or_, text
+from sqlalchemy import Engine, or_, text
 from sqlalchemy.sql.functions import count, sum, max
 from sqlalchemy.dialects.sqlite import insert
 from sqlmodel import SQLModel, Session, create_engine, select, desc, asc, distinct
@@ -18,7 +18,7 @@ class DatabaseCursor:
 
     def get_feed_entries(
         self,
-        page: int = 0,
+        page: int | None = 0,
         order_by: Literal[FeedSortOrders] = "date_posted",
         order_asc: bool = False,
         filters: Dict[str, Tuple[SQLModel, List[str]]] | None = None
@@ -54,11 +54,16 @@ class DatabaseCursor:
         # Select clause for the results
         sub_query = stmt.subquery()
         count_stmt = select(count(distinct(sub_query.c.id))).select_from(sub_query)
-        select_stmt = stmt.offset(
-            page * _ENTRIES_PER_PAGE
-        ).limit(
-            _ENTRIES_PER_PAGE
-        ).order_by(order_func(order_attr))
+
+        select_stmt = stmt
+        if page is not None:
+            select_stmt = stmt.offset(
+                page * _ENTRIES_PER_PAGE
+            ).limit(
+                _ENTRIES_PER_PAGE
+            )
+
+        select_stmt = select_stmt.order_by(order_func(order_attr))
 
         # Select clause for unique artists
         artists_stmt = select(TrackArtist.artist).order_by(TrackArtist.artist).distinct()
@@ -134,15 +139,22 @@ class DatabaseClient:
 
         SQLModel.metadata.create_all(bind=self.engine)
 
-    def __enter__(self) -> DatabaseCursor:
+    def get_cursor(self) -> DatabaseCursor:
         thread_id = get_ident()
         if thread_id in self.cursors:
-            return self.cursors[thread_id]
+            cursor = self.cursors[thread_id]
+            if cursor.session.connection().closed:
+                del self.cursors[thread_id]
+            else:
+                return self.cursors[thread_id]
 
         cursor = DatabaseCursor(self.engine)
         self.cursors[get_ident()] = cursor
 
         return cursor
+
+    def __enter__(self) -> DatabaseCursor:
+        return self.get_cursor()
 
     def __exit__(self, exc_type, exc, tb):
         thread_id = get_ident()

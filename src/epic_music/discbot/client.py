@@ -1,10 +1,9 @@
 from os import environ
 from time import time
-from typing import Any, Callable, Dict, Tuple
+from typing import Dict, Tuple
 from re import compile, Pattern
 
 from discord import Client, Guild, Member, Reaction, TextChannel, Message, Forbidden, Intents, User
-from discord.client import Coro
 from loguru import logger
 
 from epic_music.api.requests import RateLimitAPIClient, on_messages_synced, extract_url_info
@@ -12,12 +11,12 @@ from epic_music.api.models import Environment
 from epic_music.database.client import DatabaseClient
 
 DISCORD_IDS = {
-    267401734513491969: "Mokle", # Mikkel
     140425901673414656: "Frode", # Frederik
     164760621840072705: "Alex", # Alexander
     226045137657135104: "Mathias", # Mathias
     230973018707329026: "Fronk", # Frank
-    252802093654474752: "Mogens" # Magnus
+    252802093654474752: "Mogens", # Magnus
+    267401734513491969: "Mokle", # Mikkel
 }
 
 # Arbedsplads
@@ -33,6 +32,7 @@ class DiscordClient(Client):
         self,
         database_client: DatabaseClient,
         api_client: RateLimitAPIClient,
+        environment: Environment,
     ):
         super().__init__(
             intents=Intents(
@@ -54,7 +54,7 @@ class DiscordClient(Client):
         self.api_client = api_client
         self.guild: Guild = None
         self.channel: TextChannel = None
-        self.environment = Environment(environ["ENVIRONMENT"])
+        self.environment = environment
 
         self._avatar_cache: Dict[int, Tuple[float, str]] = {}
         self._avatar_ttl = 6 * 60 * 60
@@ -108,7 +108,7 @@ class DiscordClient(Client):
             return False
 
         message = (
-            "God aften kære kollega\n\n"
+            "Halløjsovs, kære kollega!\n\n"
             "Her er dit super hemmelige link til #epic-music webzonen:\n"
             f"https://mhooge.com/epic-music?token={user_token}"
         )

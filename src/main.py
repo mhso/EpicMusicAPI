@@ -15,6 +15,7 @@ from loguru import logger
 
 from epic_music.api.requests import RateLimitAPIClient
 from epic_music.api.models import (
+    Environment,
     FeedEntry,
     ResponseFeedEntry,
     ListFeedResponse,
@@ -37,6 +38,9 @@ logger.remove()
 logger.add(stdout, colorize=True, format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> <level>{message}</level>")
 logger.add("../log/log.log", serialize=True, rotation="5 MB")
 
+environment = Environment(environ["ENVIRONMENT"])
+logger.info(f"Running in +++{environment.name}+++ mode")
+
 # Create database client
 logger.info("Starting database client...")
 database_client = DatabaseClient()
@@ -46,7 +50,7 @@ logger.info("Starting API client...")
 api_client = RateLimitAPIClient()
 
 # Create and start Discord client
-discord_client = DiscordClient(database_client, api_client)
+discord_client = DiscordClient(database_client, api_client, environment)
 
 background_tasks: Dict[str, asyncio.Task] = {}
 
@@ -80,9 +84,15 @@ loggers = (
 for uvicorn_logger in loggers:
     uvicorn_logger.handlers = []
 
+allow_origin = (
+    "https://mhooge.com:5008/epic-music"
+    if environment is Environment.PRODUCTION
+    else "*"
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://mhooge.com:5008/epic-music"],
+    allow_origins=[allow_origin],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -125,8 +135,9 @@ async def log_requests(request: Request, call_next):
     return response
 
 def _create_cursor():
-    with database_client as cursor:
-        return cursor
+    cursor = database_client.get_cursor()
+    yield cursor
+    cursor.session.close()
 
 def _verify_token(authentication: str = Header()):
     if not authentication:
@@ -152,7 +163,7 @@ async def list_entries(
     posters: List[str] = Query([]),
     sort_by: FeedSortOrders = "date_posted",
     sort_order: Literal["asc", "desc"] = "desc",
-    page: int = 0,
+    page: int | None = None,
     cursor: DatabaseCursor = Depends(_create_cursor),
     token: str = Depends(_verify_token),
     cookies: Cookies = Cookie(),
@@ -252,3 +263,7 @@ def active_user(token = Depends(_verify_token)):
     name = DISCORD_IDS.get(disc_id) if disc_id else None
 
     return UserResponse(name=name)
+
+@app.get("/ping")
+def ping():
+    return "OK"

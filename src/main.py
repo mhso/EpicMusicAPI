@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from loguru import logger
 
-from epic_music.api.requests import RateLimitAPIClient
+from epic_music.api.requests import RateLimitAPIClient, try_replace_broken_links
 from epic_music.api.models import (
     Environment,
     FeedEntry,
@@ -26,8 +26,10 @@ from epic_music.api.models import (
     TrackGenre,
     Cookies,
     UserResponse,
+    MarkBrokenURLRequest,
 )
 from epic_music.database.client import DatabaseClient, DatabaseCursor
+from epic_music.api.cron_runner import CronRunner
 from epic_music.discbot.client import DiscordClient, DISCORD_IDS
 
 _SYNC_TASK_ID = "sync"
@@ -52,6 +54,13 @@ api_client = RateLimitAPIClient()
 # Create and start Discord client
 discord_client = DiscordClient(database_client, api_client, environment)
 
+cron_runner = CronRunner(database_client)
+cron_runner.add_task(
+    try_replace_broken_links,
+    args=(api_client, database_client),
+    day=7,
+)
+
 background_tasks: Dict[str, asyncio.Task] = {}
 
 @asynccontextmanager
@@ -64,10 +73,14 @@ async def fastapi_lifespan(app: FastAPI):
 
     await discord_client.wait_until_ready()
 
+    await cron_runner.start()
+
     yield
 
     logger.info("Disconnecting from database...")
     database_client.engine.dispose()
+
+    await cron_runner.stop()
 
     logger.info("Shutting down Discord bot...")
     await discord_client.close()
@@ -114,7 +127,6 @@ async def log_requests(request: Request, call_next):
     try:
         response: Response = await call_next(request)
     finally:
-
         if response:
             if response.status_code < 300:
                 color = "green"
@@ -211,7 +223,7 @@ async def list_entries(
     feed_data["unique_posters"] = [DISCORD_IDS.get(poster, "Unknown") for poster in feed_data["unique_posters"]]
 
     if not cookies.epic_music_token:
-        response.set_cookie("epic_music_token", token, max_age=60 * 60 * 24 * 365)#, secure=True, httponly=True)
+        response.set_cookie("epic_music_token", token, max_age=60 * 60 * 24 * 365, secure=True, httponly=True)
 
     return ListFeedResponse(**feed_data)
 
@@ -254,6 +266,13 @@ async def poll_status(task_id: str) -> TaskStatusResponse:
         status = "running"
 
     return TaskStatusResponse(status=status)
+
+@app.post("/mark-broken", dependencies=[Depends(_verify_token)])
+def mark_broken_link(
+    request: MarkBrokenURLRequest,
+    cursor: DatabaseCursor = Depends(_create_cursor)
+):
+    cursor.mark_link_broken(request.video_id)
 
 @app.get("/user")
 def active_user(token = Depends(_verify_token)):

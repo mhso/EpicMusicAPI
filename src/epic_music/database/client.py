@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Literal, Tuple
 from sqlalchemy import Engine, or_, text
 from sqlalchemy.sql.functions import count, sum, max
 from sqlalchemy.dialects.sqlite import insert
-from sqlmodel import SQLModel, Session, create_engine, select, desc, asc, distinct
+from sqlmodel import SQLModel, Session, create_engine, select, desc, asc, distinct, update
 
 from epic_music.api.models import  FeedEntry, TrackArtist, TrackGenre, EntryReaction, FeedSortOrders, User
 
@@ -16,9 +16,13 @@ class DatabaseCursor:
     def __init__(self, engine: Engine):
         self.session = Session(engine)
 
+    def get_all_feed_entries(self):
+        stmt = select(FeedEntry).order_by(asc(FeedEntry.date_posted))
+        return self.session.exec(stmt).all()
+
     def get_feed_entries(
         self,
-        page: int | None = 0,
+        page: int | None = None,
         order_by: Literal[FeedSortOrders] = "date_posted",
         order_asc: bool = False,
         filters: Dict[str, Tuple[SQLModel, List[str]]] | None = None
@@ -117,6 +121,11 @@ class DatabaseCursor:
         else:
             reaction_model.count = count
 
+        self.session.commit()
+
+    def mark_link_broken(self, video_id: str):
+        stmt = update(FeedEntry).where(FeedEntry.youtube_id == video_id).values(link_broken=True)
+        self.session.exec(stmt)
         self.session.commit()
 
     def insert_users_if_missing(self, discord_ids: List[int]):

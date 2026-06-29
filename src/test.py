@@ -59,6 +59,11 @@ class ScriptRunner:
         result = await self.api_client.make_discogs_api_request(params)
         print(result)
 
+    async def youtube_request(self):
+        youtube_title = "KEYGEN MUSIC ~ One hour mix"
+        result = await self.api_client.make_youtube_search_request(youtube_title)
+        print(result)
+
     async def list_entries(self):
         disc_id_reverse_lookup = {v: k for k, v in DISCORD_IDS.items()}
         filters = {}

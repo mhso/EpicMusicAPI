@@ -39,6 +39,7 @@ class FeedEntry(FeedEntryBase, table=True):
     __tablename__: str = "feed_entries"
 
     posted_by: int
+    link_broken: bool = False
 
     artists: List["TrackArtist"] = Relationship(back_populates="feed_entry", sa_relationship_kwargs={"order_by": "TrackArtist.rank.asc()"})
     genres: List["TrackGenre"] = Relationship(back_populates="feed_entry", sa_relationship_kwargs={"order_by": "TrackGenre.rank.asc()"})
@@ -90,13 +91,13 @@ class TrackGenre(SQLModel, table=True):
 
 class EntryReactionBase(SQLModel):
     emoji: str = Field(primary_key=True)
+    count: int = Field(default=1)
 
 class EntryReaction(EntryReactionBase, table=True):
     __tablename__: str = "entry_reactions"
 
     feed_id: str | None = Field(default=None, foreign_key="feed_entries.id", primary_key=True)
     emoji: str = Field(primary_key=True)
-    count: int = Field(default=1)
 
     feed_entry: FeedEntry = Relationship(back_populates="reactions")
 
@@ -147,3 +148,6 @@ class TaskStatusResponse(BaseModel):
 
 class UserResponse(BaseModel):
     name: str | None
+
+class MarkBrokenURLRequest(BaseModel):
+    video_id: str

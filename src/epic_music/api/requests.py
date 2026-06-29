@@ -108,14 +108,16 @@ class RateLimitAPIClient:
 
         return response
 
-    async def make_youtube_search_request(self, title: str, artist: str):
+    async def make_youtube_search_request(self, title: str, artist: str | None = None):
+        search_term = title if artist is None else f"{artist} - {title}"
+ 
         response = await self._make_request(
             _YOUTUBE_SEARCH_URL,
             "youtube",
             params={
                 "part": "snippet",
                 "type": "video",
-                "q": f"{artist} - {title}",
+                "q": search_term,
                 "key": self.youtube_token,
             }
         )
@@ -130,9 +132,17 @@ class RateLimitAPIClient:
             return None
 
         first_result = results[0]
-        video_id = first_result["id"]["videoId"]
+        title = first_result["snippet"]["title"]
+        channel = first_result["snippet"]["channelTitle"]
 
-        return f"https://youtube.com/watch?v={video_id}"
+        if channel.endswith(" - Topic"):
+            channel = channel.split(" - ")[0]
+
+        return {
+            "id": first_result["id"]["videoId"],
+            "title": title,
+            "channel": channel,
+        }
 
     async def make_youtube_list_request(self, video_id: str):
         response = await self._make_request(
@@ -146,13 +156,13 @@ class RateLimitAPIClient:
         )
 
         if response is None:
-            return None, None
+            return {}
 
         response_data = response.json()
         results = response_data["items"]
 
         if results == []:
-            return None, None
+            return {}
 
         first_result = results[0]
         title = first_result["snippet"]["title"]
@@ -161,7 +171,10 @@ class RateLimitAPIClient:
         if channel.endswith(" - Topic"):
             channel = channel.split(" - ")[0]
 
-        return title, channel
+        return {
+            "title": title,
+            "channel": channel,
+        }
 
     async def make_spotify_api_request(self, track_id: str):
         """
@@ -492,9 +505,9 @@ async def on_messages_synced(
         youtube_id = raw_data.pop("youtube_id")
         embed_title = raw_data.pop("title")
 
-        video_title, channel_title = await api_client.make_youtube_list_request(youtube_id)
-        if video_title is None:
-            video_title = embed_title
+        youtube_data = await api_client.make_youtube_list_request(youtube_id)
+        video_title = youtube_data.get("title", embed_title)
+        channel_title = youtube_data.get("channel")
 
         print("Video title:", video_title)
         print("Channel title:", channel_title)
@@ -540,6 +553,7 @@ async def on_messages_synced(
             original_url=raw_data["original_url"],
             youtube_id=youtube_id,
             youtube_title=video_title,
+            message=raw_data["message"],
             message_id=raw_data["message_id"],
             posted_by=raw_data["posted_by"],
             date_posted=raw_data["date_posted"],
@@ -562,3 +576,47 @@ async def on_messages_synced(
             cursor.save_feed_entries(data_models)
     except Exception:
         logger.exception("Error when saving data to database!")
+
+async def try_replace_broken_links(
+    api_client: RateLimitAPIClient,
+    database_client: DatabaseClient,
+):
+    """
+    Go through all feed entries and try to replace any broken YouTube links.
+    """
+    logger.info("Trying to replace broken YouTube URLs...")
+
+    with database_client as cursor:
+        for entry in cursor.get_all_feed_entries():
+            if entry.title is None and entry.youtube_title is None:
+                continue
+
+            list_response = await api_client.make_youtube_list_request(
+                entry.youtube_id
+            )
+
+            if not list_response:
+                cursor.mark_link_broken(entry.youtube_id)
+
+                search_title = entry.title or entry.youtube_title
+
+                artists = (
+                    None if entry.artists == []
+                    else ", ".join(a.artist for a in entry.artists)
+                )
+                search_response = await api_client.make_youtube_search_request(
+                    search_title, artists
+                )
+
+                if not search_response:
+                    continue
+
+                new_id = search_response["id"]
+
+                logger.info(f"Replaced video {search_title} from {entry.youtube_id} to {new_id}")
+
+                entry.youtube_id = new_id
+                if not entry.youtube_title:
+                    entry.youtube_title = search_response["title"]
+
+        cursor.session.commit()

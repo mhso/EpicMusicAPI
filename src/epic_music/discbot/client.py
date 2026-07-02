@@ -137,6 +137,8 @@ class DiscordClient(Client):
     async def _handle_message(self, message: Message):
         if message.channel.id != self.channel.id or message.author.id not in DISCORD_IDS:
             return []
+        
+        logger.info(f"New message from {DISCORD_IDS[message.author.id]}...")
 
         reactions = [
             {
@@ -166,7 +168,7 @@ class DiscordClient(Client):
                     "reactions": reactions,
                 }
 
-                print(f"Raw data for msg from {message.created_at}:", raw_data)
+                logger.info(f"Raw data for msg from {message.created_at}: {raw_data}")
                 track_data.append(raw_data)
 
         return track_data

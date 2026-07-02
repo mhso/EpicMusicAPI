@@ -32,6 +32,7 @@ class FeedEntryBase(SQLModel):
     message: str | None
     message_id: int
     date_posted: datetime = Field(default_factory=lambda: datetime.now())
+    link_broken: bool = Field(default=False)
 
     model_config = _MODEL_CONFIG
 
@@ -39,7 +40,6 @@ class FeedEntry(FeedEntryBase, table=True):
     __tablename__: str = "feed_entries"
 
     posted_by: int
-    link_broken: bool = False
 
     artists: List["TrackArtist"] = Relationship(back_populates="feed_entry", sa_relationship_kwargs={"order_by": "TrackArtist.rank.asc()"})
     genres: List["TrackGenre"] = Relationship(back_populates="feed_entry", sa_relationship_kwargs={"order_by": "TrackGenre.rank.asc()"})

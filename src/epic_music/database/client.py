@@ -22,7 +22,8 @@ class DatabaseCursor:
 
     def get_feed_entries(
         self,
-        page: int | None = None,
+        page_from: int | None = None,
+        page_to: int | None = None,
         order_by: Literal[FeedSortOrders] = "date_posted",
         order_asc: bool = False,
         filters: Dict[str, Tuple[SQLModel, List[str]]] | None = None
@@ -60,12 +61,12 @@ class DatabaseCursor:
         count_stmt = select(count(distinct(sub_query.c.id))).select_from(sub_query)
 
         select_stmt = stmt
-        if page is not None:
-            select_stmt = stmt.offset(
-                page * _ENTRIES_PER_PAGE
-            ).limit(
-                _ENTRIES_PER_PAGE
-            )
+        if page_from is not None or page_to is not None:
+            start_index = page_from * _ENTRIES_PER_PAGE if page_from else 0
+            end_index = page_to * _ENTRIES_PER_PAGE if page_to else None
+            select_stmt = stmt.offset(start_index)
+            if end_index:
+                select_stmt = select_stmt.limit(end_index - start_index)
 
         select_stmt = select_stmt.order_by(order_func(order_attr))
 

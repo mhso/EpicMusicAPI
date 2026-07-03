@@ -175,7 +175,8 @@ async def list_entries(
     posters: List[str] = Query([]),
     sort_by: FeedSortOrders = "date_posted",
     sort_order: Literal["asc", "desc"] = "desc",
-    page: int | None = None,
+    page_from: int | None = None,
+    page_to: int | None = None,
     cursor: DatabaseCursor = Depends(_create_cursor),
     token: str = Depends(_verify_token),
     cookies: Cookies = Cookie(),
@@ -194,7 +195,8 @@ async def list_entries(
     }
 
     feed_data = cursor.get_feed_entries(
-        page,
+        page_from,
+        page_to,
         sort_by,
         sort_order == "asc",
         filters,

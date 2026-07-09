@@ -1,8 +1,10 @@
+import os
 from datetime import datetime
-from os import environ
+from shutil import copyfile
 from threading import get_ident
 from typing import Any, Dict, List, Literal, Tuple
 
+from loguru import logger
 from sqlalchemy import Engine, or_, text
 from sqlalchemy.sql.functions import count, sum, max
 from sqlalchemy.dialects.sqlite import insert
@@ -26,7 +28,8 @@ class DatabaseCursor:
         page_to: int | None = None,
         order_by: Literal[FeedSortOrders] = "date_posted",
         order_asc: bool = False,
-        filters: Dict[str, Tuple[SQLModel, List[str]]] | None = None
+        filters: Dict[str, Tuple[SQLModel, List[str]]] | None = None,
+        query: str | None = None,
     ) -> Dict[str, Any]:
         stmt = select(
             FeedEntry
@@ -53,6 +56,9 @@ class DatabaseCursor:
             order_attr = text("sub.sum_1")
         else:
             order_attr = getattr(FeedEntry, order_by)
+
+        if query:
+            stmt = stmt.where(FeedEntry.title.like(f"%{query}%"))
 
         order_func = asc if order_asc else desc
 
@@ -93,8 +99,8 @@ class DatabaseCursor:
             "total": total
         }
 
-    def get_latest_entry_timestamp(self) -> datetime | None:
-        statement = select(max(FeedEntry.date_posted)).select_from(FeedEntry)
+    def get_latest_feed_entry(self) -> Tuple[int, datetime] | None:
+        statement = select(FeedEntry.message_id, max(FeedEntry.date_posted)).select_from(FeedEntry)
 
         return self.session.exec(statement).one_or_none()
 
@@ -143,8 +149,9 @@ class DatabaseCursor:
         return self.session.exec(select(User.id).where(User.token == token)).one_or_none()
 
 class DatabaseClient:
-    def __init__(self) -> None:
-        self.engine = create_engine(f"sqlite:///{environ['RESOURCES_PATH']}/database/database.db")
+    def __init__(self):
+        self.db_path = f"{os.environ['RESOURCES_PATH']}/database/database.db"
+        self.engine = create_engine(f"sqlite:///{self.db_path}")
         self.cursors: Dict[int, DatabaseCursor] = {}
 
         SQLModel.metadata.create_all(bind=self.engine)
@@ -162,6 +169,18 @@ class DatabaseClient:
         self.cursors[get_ident()] = cursor
 
         return cursor
+
+    def create_backup(self):
+        without_ext = self.db_path.removesuffix(".db")
+        backup_name = f"{without_ext}_backup.db"
+        try:
+            # Remove old backup if it exists.
+            if os.path.exists(backup_name):
+                os.remove(backup_name)
+
+            copyfile(self.db_path, backup_name)
+        except (OSError, IOError):
+            logger.exception("Error when creating database backup!")
 
     def __enter__(self) -> DatabaseCursor:
         return self.get_cursor()

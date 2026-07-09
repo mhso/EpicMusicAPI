@@ -1,3 +1,4 @@
+import asyncio
 from os import environ
 from time import time
 from typing import Dict, Tuple
@@ -46,21 +47,30 @@ class DiscordClient(Client):
         )
 
         with database_client as cursor:
-            latest_msg_timestamp = cursor.get_latest_entry_timestamp()
+            latest_feed_entry = cursor.get_latest_feed_entry()
             cursor.insert_users_if_missing(list(DISCORD_IDS.keys()))
 
-        self.latest_msg_timestamp = latest_msg_timestamp
+        if latest_feed_entry:
+            self.latest_id, self.latest_timestamp = latest_feed_entry
+        else:
+            self.latest_id = None
+            self.latest_timestamp = None
+
         self.database_client = database_client
         self.api_client = api_client
         self.guild: Guild = None
         self.channel: TextChannel = None
         self.environment = environment
 
+        self._initialized = False
         self._avatar_cache: Dict[int, Tuple[float, str]] = {}
         self._avatar_ttl = 6 * 60 * 60
         self._avatar_cache_size = 10
 
     async def on_ready(self):
+        if self._initialized:
+            return
+
         guild_id = TEST_GUILD_ID if self.environment is Environment.DEVELOPMENT else GUILD_ID
         channel_id = TEST_CHANNEL_ID if self.environment is Environment.DEVELOPMENT else CHANNEL_ID
 
@@ -71,6 +81,14 @@ class DiscordClient(Client):
             await self.sync_messages()
         except Exception:
             logger.exception("Exception when syncing Discord messages!")
+
+        self._initialized = True
+
+    async def on_connect(self):
+        logger.info("Discord client connected")
+
+    async def on_disconnect(self):
+        logger.info("Discord client disconnected...")
 
     async def get_avatar(self, disc_id: int):
         if self.guild is None:
@@ -134,11 +152,18 @@ class DiscordClient(Client):
 
         return content.replace(match.group(0), "")
 
-    async def _handle_message(self, message: Message):
+    async def _handle_message(self, message: Message, triggered_by_event: bool = False):
         if message.channel.id != self.channel.id or message.author.id not in DISCORD_IDS:
             return []
-        
+
         logger.info(f"New message from {DISCORD_IDS[message.author.id]}...")
+
+        # Embeds are sometimes attached to a message
+        # a few seconds after 'on_message' is triggered.
+        # If this happens, we try to re-fetch the message here
+        if triggered_by_event and message.embeds == []:
+            await asyncio.sleep(3)
+            message = await self.channel.fetch_message(message.id)
 
         reactions = [
             {
@@ -176,7 +201,10 @@ class DiscordClient(Client):
     async def sync_messages(self):
         try:
             track_data = []
-            async for message in self.channel.history(limit=None, after=self.latest_msg_timestamp, oldest_first=True):
+            async for message in self.channel.history(limit=None, after=self.latest_timestamp, oldest_first=True):
+                if message.id == self.latest_id:
+                    continue
+
                 track_data.extend(await self._handle_message(message))
 
             logger.info(f"Found {len(track_data)} new tracks in #epic-music")
@@ -207,7 +235,7 @@ class DiscordClient(Client):
         if message.channel != self.channel:
             return
 
-        track_data = await self._handle_message(message)
+        track_data = await self._handle_message(message, True)
         if track_data != []:
             await on_messages_synced(track_data, self.api_client, self.database_client)
 

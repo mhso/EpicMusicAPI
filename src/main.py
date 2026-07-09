@@ -1,19 +1,32 @@
 import asyncio
+import json
 import logging
 import re
 from http import HTTPStatus
 from contextlib import asynccontextmanager
 from sys import stdout
-from typing import Dict, List, Literal
+from typing import Any, Dict, List, Literal
 from os import environ
 
-from fastapi import Cookie, FastAPI, HTTPException, Header, Request, Response, Depends, Query
+from fastapi import (
+    Cookie,
+    FastAPI,
+    HTTPException,
+    Header,
+    Request,
+    Response,
+    Depends,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from loguru import logger
 
 from epic_music.api.requests import RateLimitAPIClient, try_replace_broken_links
+from epic_music.api.websocket_handler import WebsocketHandler
 from epic_music.api.models import (
     Environment,
     FeedEntry,
@@ -61,6 +74,8 @@ cron_runner.add_task(
     day=7,
 )
 
+websocket_handler = WebsocketHandler()
+
 background_tasks: Dict[str, asyncio.Task] = {}
 
 @asynccontextmanager
@@ -69,7 +84,7 @@ async def fastapi_lifespan(app: FastAPI):
     
     logger.info("Starting Discord bot...")
     await discord_client.login(environ["DISCORD_TOKEN"])
-    discord_task = asyncio.create_task(discord_client.connect())
+    discord_task = asyncio.create_task(discord_client.connect(reconnect=True))
 
     await discord_client.wait_until_ready()
 
@@ -166,6 +181,34 @@ def _verify_token(authentication: str = Header()):
 
     return token
 
+async def _format_feed_entries(feed_data: Dict[str, Any]):
+    response_entries = []
+    for entry in feed_data["entries"]:
+        extra = {
+            "posted_by": DISCORD_IDS.get(entry.posted_by, "Unknown"),
+            "avatar": await discord_client.get_avatar(entry.posted_by)
+        }
+        response_entry = ResponseFeedEntry.model_validate(entry, update=extra)
+
+        for reaction in response_entry.reactions:
+            if (match := re.match(r"\<a?\:(.+)\:(\d+)\>", reaction.emoji)):
+                emoji_id = int(match.group(2))
+                emoji = discord_client.get_emoji(emoji_id)
+                if emoji is None or not emoji.available or emoji.animated:
+                    reaction.emoji = "❓"
+                else:
+                    reaction.emoji_url = emoji.url
+
+        # Limit to 3 genres max
+        response_entry.genres = response_entry.genres[:3]
+
+        response_entries.append(response_entry)
+
+    feed_data["entries"] = response_entries
+    feed_data["unique_posters"] = [DISCORD_IDS.get(poster, "Unknown") for poster in feed_data["unique_posters"]]
+
+    return feed_data
+
 @app.get("/list")
 async def list_entries(
     response: Response,
@@ -202,32 +245,12 @@ async def list_entries(
         filters,
     )
 
-    response_entries = []
-    for entry in feed_data["entries"]:
-        extra = {
-            "posted_by": DISCORD_IDS.get(entry.posted_by, "Unknown"),
-            "avatar": await discord_client.get_avatar(entry.posted_by)
-        }
-        response_entry = ResponseFeedEntry.model_validate(entry, update=extra)
-
-        for reaction in response_entry.reactions:
-            if (match := re.match(r"\<a?\:(.+)\:(\d+)\>", reaction.emoji)):
-                emoji_id = int(match.group(2))
-                emoji = discord_client.get_emoji(emoji_id)
-                if emoji is None or not emoji.available or emoji.animated:
-                    reaction.emoji = "❓"
-                else:
-                    reaction.emoji_url = emoji.url
-
-        response_entries.append(response_entry)
-
-    feed_data["entries"] = response_entries
-    feed_data["unique_posters"] = [DISCORD_IDS.get(poster, "Unknown") for poster in feed_data["unique_posters"]]
-
     if not cookies.epic_music_token:
         response.set_cookie("epic_music_token", token, max_age=60 * 60 * 24 * 365, secure=True, httponly=True)
 
-    return ListFeedResponse(**feed_data)
+    formatted_data = await _format_feed_entries(feed_data)
+
+    return ListFeedResponse(**formatted_data)
 
 @app.get("/search", dependencies=[Depends(_verify_token)])
 def search_in_entries(search_term: str, token: str) -> ListFeedResponse:
@@ -288,3 +311,33 @@ def active_user(token = Depends(_verify_token)):
 @app.get("/ping")
 def ping():
     return "OK"
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: int):
+    logger.info(f"Client with ID '{client_id}' connected to websocket.")
+
+    await websocket_handler.connect(websocket)
+
+    with database_client as cursor:
+        try:
+            while True:
+                search_json = await websocket.receive_text()
+                try:
+                    search_data = json.loads(search_json)
+                except json.JSONDecodeError:
+                    continue
+
+                feed_data = cursor.get_feed_entries(
+                    page_from=search_data["page_from"],
+                    page_to=search_data["page_to"],
+                    order_by=search_data["sort_by"],
+                    order_asc=search_data["sort_order"] == "asc",
+                    query=search_data["query"],
+                )
+
+                formatted_data = await _format_feed_entries(feed_data)
+                response = ListFeedResponse(**formatted_data)
+
+                await websocket.send_text(response.model_dump_json())
+        except WebSocketDisconnect:
+            websocket_handler.disconnect(websocket)

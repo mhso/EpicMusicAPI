@@ -1,12 +1,13 @@
 import asyncio
 from datetime import datetime
 import json
+import re
 from typing import Any, Dict, List, Literal, Tuple
 from os import environ
 from urllib.parse import urlparse, parse_qs
 from time import time
 
-from httpx import AsyncClient, Auth, DigestAuth, ReadTimeout
+from httpx import AsyncClient, Auth, DigestAuth, ReadTimeout, ConnectError
 from loguru import logger
 from anthropic import AsyncAnthropic
 
@@ -56,7 +57,7 @@ class RateLimitAPIClient:
         requests_remaining = self._max_requests_per_min[site_name] - requests_made
         time_since_first = time() - self._recent_requests[site_name][0]
 
-        return time_since_first / requests_remaining
+        return (time_since_first / requests_remaining) + 0.1
 
     async def _make_request(
         self,
@@ -85,7 +86,7 @@ class RateLimitAPIClient:
                 async with AsyncClient() as client:
                     response = await client.get(url, params=params, headers=headers, auth=auth)
 
-            except ReadTimeout:
+            except (ReadTimeout, ConnectError):
                 pass
 
             self._recent_requests[site_name].append(time())
@@ -182,64 +183,108 @@ class RateLimitAPIClient:
         """
 
     async def make_discogs_api_request(self, params: Dict[str, str]):
-        response = await self._make_request(
-            _DISCOGS_SEARCH_URL,
-            "discogs",
-            params={
-                "token": self.discogs_token,
-                **params,
-            },
-        )
-        if response is None:
-            return {}
+        artists = params.pop("artists", [None])
 
-        response_data = response.json()["results"]
+        for artist in artists:
+            if artist:
+                params["artist"] = artist
 
-        if not response_data:
-            return {}
+                # If both track and album is given, remove album.
+                # This gives us higher odds of a search hit
+                if params.get("track") and params.get("release_title"):
+                    del params["release_title"]
 
-        with open("discogz.json", "w", encoding="utf-8") as fp:
-            json.dump(response_data, fp)
+            response = await self._make_request(
+                _DISCOGS_SEARCH_URL,
+                "discogs",
+                params={
+                    "token": self.discogs_token,
+                    **params,
+                },
+            )
+            if response is None:
+                return {}
 
-        for entry in response_data:
-            if entry["type"] != "release":
-                continue
+            response_data = response.json()["results"]
 
-            album = entry.get("title")
-            genres = entry.get("genre")
+            if not response_data:
+                return {}
 
-            if album is not None and genres:
-                return {
-                    "album": album,
-                    "genres": genres,
-                }
+            if environ["ENVIRONMENT"] == "dev":
+                with open("discogs.json", "w", encoding="utf-8") as fp:
+                    json.dump(response_data, fp)
+
+            for entry in response_data:
+                if entry["type"] != "release":
+                    continue
+
+                album = entry.get("title")
+                genres = [genre.lower() for genre in entry.get("genre", [])]
+
+                if album is not None and genres:
+                    return {
+                        "album": album,
+                        "genres": genres,
+                    }
 
         return {}
 
-    async def make_musicbrainz_api_request(
+    async def make_musicbrainz_genres_request(self, release_group: str):
+        response = await self._make_request(
+            f"{_MUSICBRANZ_BASE_URL}/release-group/{release_group}",
+            "musicbrainz",
+            params={
+                "inc": "genres+user-genres",
+            },
+            headers={"Accept": "application/json"},
+            auth=DigestAuth(self.musicbrainz_username, self.musicbrainz_password),
+        )
+
+        if response is None:
+            return []
+
+        response_data = response.json()
+
+        if response_data == []:
+            return []
+
+        genres = response_data.get("genres", response_data.get("user-genres", []))
+
+        if not genres:
+            return []
+
+        genres.sort(key=lambda v: v["count"], reverse=True)
+
+        return [genre["name"].lower() for genre in genres[:5]]
+
+    async def make_musicbrainz_search_request(
         self,
         track: str | None,
         artist: str | None,
-        album: str | None,
-    ) -> Dict[str, str | List[str]]:
+        album: str | None = None,
+        fuzzy: bool = True,
+        order_by_date: bool = False,
+    ) -> List[Dict[str, str | List[str]]]:
         params = {}
 
-        if track is not None: # Search for track
+        suf = "~" if fuzzy else ""
+
+        if track: # Search for track
             category = "recording"
-            if artist is not None: # Include artist in search
-                params["artist"] = artist
+            if artist: # Include artist in search
+                params["artist"] = f'"{artist.strip()}{suf}"'
 
-            params["recording"] = track
+            params["recording"] = f'"{track.strip()}{suf}"'
 
-        elif album is not None: # Search for album
+        elif album: # Search for album
             category = "release"
-            if artist is not None: # Include artist in search
-                params["artist"] = artist
+            if artist: # Include artist in search
+                params["artist"] = f'"{artist.strip()}{suf}"'
 
-            params["release"] = album
-        
+            params["release"] = f'"{album.strip()}{suf}"'
+
         else:
-            return {}
+            return []
 
         terms = " AND ".join([f"{k}:{v}" for k, v in params.items()])
         query = f"query={terms}"
@@ -248,7 +293,7 @@ class RateLimitAPIClient:
             f"{_MUSICBRANZ_BASE_URL}/{category}",
             "musicbrainz",
             params={
-                "limit": 10,
+                "limit": 5,
                 "query": query,
             },
             headers={"Accept": "application/json"},
@@ -256,15 +301,16 @@ class RateLimitAPIClient:
         )
 
         if response is None:
-            return {}
+            return []
 
         response_data = response.json()[f"{category}s"]
 
         if response_data == []:
-            return {}
+            return []
 
-        with open("musicbrainz.json", "w", encoding="utf-8") as fp:
-            json.dump(response_data, fp)
+        if environ["ENVIRONMENT"] == "dev":
+            with open("musicbrainz.json", "w", encoding="utf-8") as fp:
+                json.dump(response_data, fp)
 
         def _parse_date(date: str):
             try:
@@ -275,13 +321,14 @@ class RateLimitAPIClient:
                 except ValueError:
                     return time()
 
-        response_data.sort(key=lambda d: _parse_date(d.get("first-release-date", time())))
+        if order_by_date:
+            response_data.sort(key=lambda d: _parse_date(d.get("first-release-date", time())))
 
-        # Try to get specific info for the top 10 search results
-        data = {}
+        # Try to get specific info for the top 5 search results
+        valid_tracks = []
         for result in response_data:
             result_title = result.get("title")
-            artists = [artist["name"] for artist in result["artist-credit"]]
+            artists = list(set(artist["name"] for artist in result["artist-credit"]))
 
             if category == "release":
                 release_group = result["release-group"]
@@ -293,6 +340,10 @@ class RateLimitAPIClient:
                 continue
 
             if result_title is not None and artists != []:
+                data = {}
+                if release_group:
+                    data["release_group"] = release_group["id"]
+
                 if category == "recording":
                     data["title"] = result_title
                     releases = result.get("releases", [])
@@ -303,22 +354,10 @@ class RateLimitAPIClient:
                     data["album"] = result_title
 
                 data["artists"] = artists
-                break
 
-        if (album := params.get("release")):
-            params["release_title"] = album
-            del params["release"]
+                valid_tracks.append(data)
 
-        if (artists := data.get("artists")):
-            params["artist"] = artists[0]
-
-        # Make a reqest to Discogs to get genre and album if it wasn't found on MusicBrainz
-        discogs_data = await self.make_discogs_api_request(params)
-
-        data["album"] = data.get("album", discogs_data.get("album"))
-        data["genres"] = discogs_data.get("genres", [])
-
-        return data
+        return valid_tracks
 
 async def _extract_track_info(video_title: str, channel_title: str | None):
     """
@@ -374,11 +413,13 @@ async def _evaluate_lookup_result(raw_data: Dict[str, str], processed_data: Dict
     client = AsyncAnthropic(api_key=environ["CLAUDE_API_KEY"])
 
     processed_copy = dict(processed_data)
-    del processed_copy["genres"]
 
     if "title" in processed_copy:
         processed_copy["track"] = processed_copy["title"]
         del processed_copy["title"]
+
+    if "release_group" in processed_copy:
+        del processed_copy["release_group"]
 
     raw_json = json.dumps(raw_data)
     processed_json = json.dumps(processed_copy)
@@ -491,6 +532,107 @@ def extract_url_info(
 
     return site_name, video_id
 
+def _try_to_extract_artists(artist: str):
+    if re.search(r"(.+)\s?\&\s(.+)", artist):
+        return artist.split("&")
+
+    if re.search(r"(.+)\s?\&\s(.+)", artist):
+        return artist.split("+")
+
+    if re.search(r"(.+)\s?(,\s(.+))+", artist):
+        return artist.split(",")
+
+    feat_patterns = [
+        (r"(.+)\s?ft\.\s(.+)(\,\s?.+)*", "ft"),
+        (r"(.+)\s?feat\.\s(.+)(\,\s?.+)*", "feat"),
+        (r"(.+)\s?featuring\.\s(.+)(\,\s?.+)*", "featuring"),
+    ]
+
+    for pattern, word in feat_patterns:
+        if re.search(pattern, artist):
+            feat_split = artist.split(word)
+            if len(feat_split) > 1:
+                feat_split = [feat_split[0]] + feat_split[1].split(",")
+
+            return feat_split
+
+    return []
+
+async def extract_track_data(
+    youtube_id: str,
+    video_title: str,
+    api_client: RateLimitAPIClient
+):
+    youtube_data = await api_client.make_youtube_list_request(youtube_id)
+    video_title = youtube_data.get("title", video_title)
+    channel_title = youtube_data.get("channel")
+
+    print("Video title:", video_title)
+    print("Channel title:", channel_title)
+
+    extracted_content = await _extract_track_info(video_title, channel_title)
+
+    print("Extracted JSON by Claude:", extracted_content[0].text)
+    try:
+        extracted_data = json.loads(extracted_content[0].text)
+    except json.JSONDecodeError:
+        extracted_data = {}
+
+    if (artist := extracted_data.get("artist")):
+        artists = [artist] + _try_to_extract_artists(artist)
+    else:
+        artists = [None]
+
+    for artist in artists:
+        try:
+            tracks = await api_client.make_musicbrainz_search_request(
+                extracted_data.get("track"),
+                artist,
+                extracted_data.get("album"),
+            )
+        except Exception:
+            logger.exception("Error during musicbrainz API request!")
+            tracks = []
+
+        if extracted_data:
+            for track_data in tracks:
+                print("Track data:", track_data)
+                score_content = await _evaluate_lookup_result(extracted_data, track_data)
+                try:
+                    score_data = json.loads(score_content[0].text)
+                except json.JSONDecodeError:
+                    score_data = {}
+
+                print("Score evaluated by Claude:", score_data)
+
+                if score_data.get("score", 0) > _CLAUDE_TRACK_SCORE_THRESHOLD:
+                    # Make another request to Musicbrainz to get genre
+                    genres = []
+                    if (release_group := track_data.get("release_group")):
+                        genres = await api_client.make_musicbrainz_genres_request(release_group)
+                        track_data["genres"] = genres
+
+                    # If that didn't work, try Discogs
+                    if genres == []:
+                        params = {}
+                        if (title := track_data.get("title")):
+                            params["track"] = title
+                        if (album := track_data.get("album")):
+                            params["release_title"] = album
+                        if (artists := track_data.get("artists")):
+                            params["artists"] = artists
+
+                        discogs_data = await api_client.make_discogs_api_request(params)
+
+                        if not track_data.get("album") and (album := discogs_data.get("album")):
+                            track_data["album"] = album
+
+                        track_data["genres"] = discogs_data.get("genres", [])
+
+                    return video_title, track_data
+
+    return video_title, {}
+
 async def on_messages_synced(
     feed_entries: List[Dict[str, Any]],
     api_client: RateLimitAPIClient,
@@ -505,46 +647,17 @@ async def on_messages_synced(
         youtube_id = raw_data.pop("youtube_id")
         embed_title = raw_data.pop("title")
 
-        youtube_data = await api_client.make_youtube_list_request(youtube_id)
-        video_title = youtube_data.get("title", embed_title)
-        channel_title = youtube_data.get("channel")
-
-        print("Video title:", video_title)
-        print("Channel title:", channel_title)
-
-        extracted_content = await _extract_track_info(video_title, channel_title)
-
-        print("Extracted JSON by Claude:", extracted_content[0].text)
-        try:
-            extracted_data = json.loads(extracted_content[0].text)
-        except json.JSONDecodeError:
-            extracted_data = {}
-
-        try:
-            track_data = await api_client.make_musicbrainz_api_request(
-                extracted_data.get("track"),
-                extracted_data.get("artist"),
-                extracted_data.get("album"),
-            )
-        except Exception:
-            logger.exception("Error during musicbrainz API request!")
-            track_data = {}
-
-        if extracted_data and track_data:
-            score_content = await _evaluate_lookup_result(extracted_data, track_data)
-            try:
-                score_data = json.loads(score_content[0].text)
-            except json.JSONDecodeError:
-                score_data = {}
-
-            print("Score evaluated by Claude:", score_data)
-
-            if score_data["score"] < _CLAUDE_TRACK_SCORE_THRESHOLD:
-                track_data = {}
+        video_title, track_data = await extract_track_data(youtube_id, embed_title, api_client)
 
         reactions = [EntryReaction(**reaction_data) for reaction_data in raw_data.pop("reactions")]
-        artists = [TrackArtist(artist=artist) for artist in track_data.get("artists", [])]
-        genres = [TrackGenre(genre=genre, rank=index) for index, genre in enumerate(track_data.get("genres", []))]
+        artists = [
+            TrackArtist(artist=artist, rank=index)
+            for index, artist in enumerate(track_data.get("artists", []))
+        ]
+        genres = [
+            TrackGenre(genre=genre, rank=index)
+            for index, genre in enumerate(track_data.get("genres", []))
+        ]
 
         model = FeedEntry(
             title=track_data.get("title"),
@@ -574,6 +687,8 @@ async def on_messages_synced(
     try:
         with database_client as cursor:
             cursor.save_feed_entries(data_models)
+
+        database_client.create_backup()
     except Exception:
         logger.exception("Error when saving data to database!")
 

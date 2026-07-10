@@ -220,6 +220,7 @@ async def list_entries(
     sort_order: Literal["asc", "desc"] = "desc",
     page_from: int | None = None,
     page_to: int | None = None,
+    query: str | None = None,
     cursor: DatabaseCursor = Depends(_create_cursor),
     token: str = Depends(_verify_token),
     cookies: Cookies = Cookie(),
@@ -243,6 +244,7 @@ async def list_entries(
         sort_by,
         sort_order == "asc",
         filters,
+        query,
     )
 
     if not cookies.epic_music_token:

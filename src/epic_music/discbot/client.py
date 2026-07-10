@@ -156,8 +156,6 @@ class DiscordClient(Client):
         if message.channel.id != self.channel.id or message.author.id not in DISCORD_IDS:
             return []
 
-        logger.info(f"New message from {DISCORD_IDS[message.author.id]}...")
-
         # Embeds are sometimes attached to a message
         # a few seconds after 'on_message' is triggered.
         # If this happens, we try to re-fetch the message here

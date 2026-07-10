@@ -589,6 +589,7 @@ async def extract_track_data(
                 extracted_data.get("track"),
                 artist,
                 extracted_data.get("album"),
+                order_by_date=True,
             )
         except Exception:
             logger.exception("Error during musicbrainz API request!")

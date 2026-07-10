@@ -10,7 +10,7 @@ from sqlalchemy.sql.functions import count, sum, max
 from sqlalchemy.dialects.sqlite import insert
 from sqlmodel import SQLModel, Session, create_engine, select, desc, asc, distinct, update
 
-from epic_music.api.models import  FeedEntry, TrackArtist, TrackGenre, EntryReaction, FeedSortOrders, User
+from epic_music.api.models import FeedEntry, TrackArtist, TrackGenre, EntryReaction, FeedSortOrders, User
 
 _ENTRIES_PER_PAGE = 60
 
@@ -58,7 +58,13 @@ class DatabaseCursor:
             order_attr = getattr(FeedEntry, order_by)
 
         if query:
-            stmt = stmt.where(FeedEntry.title.like(f"%{query}%"))
+            stmt = stmt.where(
+                or_(
+                    FeedEntry.title.like(f"%{query}%"),
+                    FeedEntry.album.like(f"%{query}%"),
+                    TrackArtist.artist.like(f"%{query}%"),
+                )
+            )
 
         order_func = asc if order_asc else desc
 

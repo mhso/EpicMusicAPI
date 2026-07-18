@@ -1,11 +1,10 @@
 from datetime import datetime
-from typing import List, Literal
+from typing import Dict, List, Literal
 from uuid import uuid4
 
 from discord import Enum
 from pydantic.alias_generators import to_camel
 from pydantic import BaseModel, model_serializer, SerializerFunctionWrapHandler
-
 from sqlmodel import SQLModel, Field, Relationship
 from sqlmodel._compat import SQLModelConfig
 
@@ -131,7 +130,7 @@ class Filters(BaseModel):
 class ListFeedResponse(BaseModel):
     entries: List[ResponseFeedEntry]
     unique_artists: List[str]
-    unique_genres: List[str]
+    unique_genres: Dict[str, List[str]]
     unique_posters: List[str]
     total: int
 

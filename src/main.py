@@ -41,6 +41,7 @@ from epic_music.api.models import (
     UserResponse,
     MarkBrokenURLRequest,
 )
+from epic_music.api.genre_mapping import GENRE_MAPPING
 from epic_music.database.client import DatabaseClient, DatabaseCursor
 from epic_music.api.cron_runner import CronRunner
 from epic_music.discbot.client import DiscordClient, DISCORD_IDS
@@ -67,12 +68,15 @@ api_client = RateLimitAPIClient()
 # Create and start Discord client
 discord_client = DiscordClient(database_client, api_client, environment)
 
-cron_runner = CronRunner(database_client)
-cron_runner.add_task(
-    try_replace_broken_links,
-    args=(api_client, database_client),
-    day=7,
-)
+if environment is Environment.PRODUCTION:
+    cron_runner = CronRunner(database_client)
+    cron_runner.add_task(
+        try_replace_broken_links,
+        args=(api_client, database_client),
+        day=7,
+    )
+else:
+    cron_runner = None
 
 websocket_handler = WebsocketHandler()
 
@@ -81,21 +85,23 @@ background_tasks: Dict[str, asyncio.Task] = {}
 @asynccontextmanager
 async def fastapi_lifespan(app: FastAPI):
     logger.info("Starting FastAPI...")
-    
+
     logger.info("Starting Discord bot...")
     await discord_client.login(environ["DISCORD_TOKEN"])
     discord_task = asyncio.create_task(discord_client.connect(reconnect=True))
 
     await discord_client.wait_until_ready()
 
-    await cron_runner.start()
+    if cron_runner:
+        await cron_runner.start()
 
     yield
 
     logger.info("Disconnecting from database...")
     database_client.engine.dispose()
 
-    await cron_runner.stop()
+    if cron_runner:
+        await cron_runner.stop()
 
     logger.info("Shutting down Discord bot...")
     await discord_client.close()
@@ -190,6 +196,7 @@ async def _format_feed_entries(feed_data: Dict[str, Any]):
         }
         response_entry = ResponseFeedEntry.model_validate(entry, update=extra)
 
+        # Find any custom emojis in reactions and format them
         for reaction in response_entry.reactions:
             if (match := re.match(r"\<a?\:(.+)\:(\d+)\>", reaction.emoji)):
                 emoji_id = int(match.group(2))
@@ -206,6 +213,20 @@ async def _format_feed_entries(feed_data: Dict[str, Any]):
 
     feed_data["entries"] = response_entries
     feed_data["unique_posters"] = [DISCORD_IDS.get(poster, "Unknown") for poster in feed_data["unique_posters"]]
+
+    grouped_genres = {}
+    for subgenre in feed_data["unique_genres"]:
+        if subgenre in GENRE_MAPPING:
+            continue
+
+        for main_genre in GENRE_MAPPING:
+            if subgenre in GENRE_MAPPING[main_genre]:
+                if main_genre not in grouped_genres:
+                    grouped_genres[main_genre] = []
+
+                grouped_genres[main_genre].append(subgenre)
+
+    feed_data["unique_genres"] = grouped_genres
 
     return feed_data
 
@@ -230,6 +251,15 @@ async def list_entries(
     based on given parameters and with pagination support
     """
     disc_id_reverse_lookup = {v: k for k, v in DISCORD_IDS.items()}
+
+    # Add main genre(s) to list of genre filters
+    main_genres = set()
+    genres_set = set(genres)
+    for main_genre in GENRE_MAPPING:
+        if len(GENRE_MAPPING[main_genre] - genres_set) == 0:
+            main_genres.add(main_genre)
+
+    genres.extend(main_genres)
 
     filters = {
         "site_name": (FeedEntry, site_names),
